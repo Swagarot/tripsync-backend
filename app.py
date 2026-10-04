@@ -23,6 +23,15 @@ def health():
     # HTTP response with the correct JSON headers. Returning a plain dict
     # directly also works in modern Flask, but jsonify() is the explicit,
     # classic way and makes the intent obvious.
+@app.route("/health/live")
+def live():
+    return jsonify({"status": "alive"})
+    # This is a "liveness" endpoint, which is used by Kubernetes to check if the app is still running. If this endpoint fails, Kubernetes will restart the container.
+
+@app.route("/health/ready")
+def ready():
+    return jsonify({"status": "ready"})
+    # This is a "readiness" endpoint, which is used by Kubernetes to check if the app is ready to receive traffic. If this endpoint fails, Kubernetes will stop sending traffic to the container until it passes again.
 
 if __name__ == "__main__":
     # This block only runs when you execute this file directly
@@ -34,3 +43,4 @@ if __name__ == "__main__":
     # pages in the browser. This is DEV-ONLY — we'll swap in a proper
     # production server (Gunicorn) when we containerize this later,
     # since Flask's built-in server isn't meant to handle real traffic.
+
