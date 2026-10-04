@@ -49,4 +49,3 @@ if __name__ == "__main__":
     # the container itself. debug=True is dev-only (auto-reload, debugger
     # in the browser). Swap in Gunicorn for real deployments.
     app.run(debug=True, host="0.0.0.0", port=5000)
-    
