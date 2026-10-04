@@ -1,46 +1,51 @@
 from flask import Flask, jsonify
-from flask_cors import CORS
-# Flask: the core class that represents your web application
+# Flask: the core class that represents your web application.
 # jsonify: converts a Python dict into a proper JSON HTTP response
-#          (sets the Content-Type header to application/json automatically)
+#          (sets Content-Type to application/json automatically).
+from flask_cors import CORS
+# CORS: lets us explicitly allow other origins (like the React dev server
+# on a different port) to read this API's responses. Without it, browsers
+# block cross-origin requests by default as a security measure.
 
 app = Flask(__name__)
-# Creates the Flask application object.
-# __name__ tells Flask where this file lives on disk, so it can correctly
-# locate other things relative to it later (templates/, static/, etc.)
-# — not used yet, but Flask apps always start this way.
+# Creates the Flask application object. __name__ tells Flask where this
+# file lives on disk so it can locate other things relative to it later
+# (templates/, static/, etc.). Flask apps always start this way.
 
-CORS(app)  # allows all origins for now — fine for local dev,
-           # we'll lock this down to your actual frontend domain later
+CORS(app)
+# Allows all origins. Fine for local dev; lock it down to the real
+# frontend domain in production.
 
+
+# A decorator: registers the function below with Flask, mapping the URL
+# path "/health" to it. Without this line, health() is just a normal
+# Python function and Flask doesn't know to call it on a web request.
 @app.route("/health")
-# A decorator: it registers the function below with Flask, mapping the URL
-# path "/health" to it. Without this line, health() is just a normal Python
-# function — Flask has no idea it should be called on a web request.
 def health():
+    # jsonify() turns the dict into a real HTTP response with JSON headers.
     return jsonify({"status": "ok"})
-    # jsonify() takes our dict {"status": "ok"} and turns it into a real
-    # HTTP response with the correct JSON headers. Returning a plain dict
-    # directly also works in modern Flask, but jsonify() is the explicit,
-    # classic way and makes the intent obvious.
+
+
+# Liveness probe: "is the process stuck?" Keep it shallow. A failure makes
+# Kubernetes restart the pod, so it must NOT depend on the database.
 @app.route("/health/live")
 def live():
     return jsonify({"status": "alive"})
-    # This is a "liveness" endpoint, which is used by Kubernetes to check if the app is still running. If this endpoint fails, Kubernetes will restart the container.
 
+
+# Readiness probe: "can this pod serve traffic right now?" A failure only
+# removes the pod from the Service (no restart). Once Postgres exists,
+# this is where the DB connection check goes.
 @app.route("/health/ready")
 def ready():
     return jsonify({"status": "ready"})
-    # This is a "readiness" endpoint, which is used by Kubernetes to check if the app is ready to receive traffic. If this endpoint fails, Kubernetes will stop sending traffic to the container until it passes again.
+
 
 if __name__ == "__main__":
-    # This block only runs when you execute this file directly
-    # (python app.py) — NOT when this file is imported elsewhere
-    # (e.g. by a test file or a WSGI server later). Standard Python pattern.
+    # Runs only when this file is executed directly (python app.py), not
+    # when it's imported elsewhere (tests, a WSGI server). Standard pattern.
+    # host="0.0.0.0" makes Flask listen on all interfaces inside the
+    # container; the default 127.0.0.1 only accepts connections from inside
+    # the container itself. debug=True is dev-only (auto-reload, debugger
+    # in the browser). Swap in Gunicorn for real deployments.
     app.run(debug=True, host="0.0.0.0", port=5000)
-    # Starts Flask's built-in development server on port 5000.
-    # debug=True enables auto-reload on code changes + detailed error
-    # pages in the browser. This is DEV-ONLY — we'll swap in a proper
-    # production server (Gunicorn) when we containerize this later,
-    # since Flask's built-in server isn't meant to handle real traffic.
-
