@@ -39,7 +39,7 @@ pipeline {
                 // trigger a backend build.
                 dir('devops') {
                     git branch: 'main',
-                        credentialsId: 'github-creds',
+                        credentialsId: '6daea266-02fa-4ffd-ad67-4ab97eec3938',
                         url: 'https://github.com/Swagarot/tripsync-devops.git',
                         poll: false
                 }
