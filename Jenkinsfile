@@ -109,19 +109,25 @@ pipeline {
 
         stage('Deploy') {
             steps {
-                // --reset-then-reuse-values: start from values.yaml, re-apply
-                // the --set values of the previous release (e.g. the frontend
-                // tag), then apply ours. Without it the frontend tag would be
-                // reset to 'latest'. Needs Helm 3.14+.
-                // -n default is where the release is stored; the pods live in
-                // the 'tripsync' namespace (set by the chart).
-                sh '''
-                    helm upgrade tripsync devops/k8s-helm/tripsync -n default \
-                      --reset-then-reuse-values \
-                      --set-string backend.image.tag=$IMAGE_TAG \
-                      --atomic --timeout 3m
-                    kubectl get pods -n tripsync
-                '''
+                // Lockable Resources plugin. The frontend job takes the same
+                // lock, so only one helm upgrade of the shared 'tripsync'
+                // release runs at a time; the other job waits here instead of
+                // failing with "another operation is in progress".
+                lock('tripsync-release') {
+                    // --reset-then-reuse-values: start from values.yaml,
+                    // re-apply the --set values of the previous release (e.g.
+                    // the frontend tag), then apply ours. Without it the
+                    // frontend tag would be reset to 'latest'. Needs Helm 3.14+.
+                    // -n default is where the release is stored; the pods live
+                    // in the 'tripsync' namespace (set by the chart).
+                    sh '''
+                        helm upgrade tripsync devops/k8s-helm/tripsync -n default \
+                          --reset-then-reuse-values \
+                          --set-string backend.image.tag=$IMAGE_TAG \
+                          --atomic --timeout 3m
+                        kubectl get pods -n tripsync
+                    '''
+                }
             }
         }
     }
