@@ -20,5 +20,10 @@ COPY . .
 # publish it — that happens at "docker run" time — but it's good practice)
 EXPOSE 5000
 
-# The command that runs when the container starts
-CMD ["python", "app.py"]
+# The command that runs when the container starts.
+# Gunicorn is a production WSGI server; `app:app` = the `app` object in
+# app.py. Flask's built-in server (python app.py) is for development only.
+# One worker on purpose: the Prometheus counters live in process memory, so
+# several workers would each report different numbers. Threads still let one
+# worker handle concurrent requests. Scale with more pods, not workers.
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "4", "--access-logfile", "-", "app:app"]

@@ -6,6 +6,10 @@ from flask_cors import CORS
 # CORS: lets us explicitly allow other origins (like the React dev server
 # on a different port) to read this API's responses. Without it, browsers
 # block cross-origin requests by default as a security measure.
+from prometheus_flask_exporter import PrometheusMetrics
+# PrometheusMetrics: adds a /metrics endpoint in the text format Prometheus
+# scrapes, and counts every request (by endpoint, method and status code)
+# and how long it took.
 
 app = Flask(__name__)
 # Creates the Flask application object. __name__ tells Flask where this
@@ -15,6 +19,14 @@ app = Flask(__name__)
 CORS(app)
 # Allows all origins. Fine for local dev; lock it down to the real
 # frontend domain in production.
+
+metrics = PrometheusMetrics(app)
+# Counters live in this process's memory, which is why Gunicorn runs a
+# single worker (see the Dockerfile): with several workers each would keep
+# its own counts and every scrape would hit a random one. Scale with pod
+# replicas instead; Prometheus scrapes each pod separately.
+# Note: /metrics is not exposed through the Ingress (only /api/... is), so
+# it's reachable from inside the cluster only.
 
 
 # A decorator: registers the function below with Flask, mapping the URL
@@ -42,10 +54,11 @@ def ready():
 
 
 if __name__ == "__main__":
-    # Runs only when this file is executed directly (python app.py), not
-    # when it's imported elsewhere (tests, a WSGI server). Standard pattern.
-    # host="0.0.0.0" makes Flask listen on all interfaces inside the
-    # container; the default 127.0.0.1 only accepts connections from inside
-    # the container itself. debug=True is dev-only (auto-reload, debugger
-    # in the browser). Swap in Gunicorn for real deployments.
+    # Local development only: `python app.py`. The container runs Gunicorn
+    # instead (see the Dockerfile), which imports `app` and never reaches
+    # this block. host="0.0.0.0" makes Flask listen on all interfaces; the
+    # default 127.0.0.1 only accepts connections from the same machine.
+    # debug=True gives auto-reload and the in-browser debugger, which can
+    # run code, so it must never be what serves real traffic. (With debug
+    # on, prometheus-flask-exporter also leaves /metrics out by default.)
     app.run(debug=True, host="0.0.0.0", port=5000)
