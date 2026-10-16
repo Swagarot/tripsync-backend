@@ -101,6 +101,11 @@ def summarize(itinerary):
             steps.append({
                 "mode": mode,
                 "line": line_label(leg),
+                # Where you get on and off, and the train's direction, in the
+                # user's language when the agency publishes translations.
+                "from": (leg.get("from") or {}).get("name"),
+                "to": (leg.get("to") or {}).get("name"),
+                "headsign": leg.get("headsign"),
                 # Full name + direction, for the badge's tooltip.
                 "title": " · ".join(x for x in (leg.get("routeLongName"), leg.get("headsign")) if x),
                 "color": color,
@@ -114,8 +119,8 @@ def summarize(itinerary):
     }
 
 
-def plan_pair(a, b, date):
-    key = (a, b, date)
+def plan_pair(a, b, date, lang="en"):
+    key = (a, b, date, lang)
     with _lock:
         if key in _cache:
             return _cache[key]
@@ -128,6 +133,9 @@ def plan_pair(a, b, date):
         # a big place's pin can be far from its entrance or the nearest station.
         "maxPreTransitTime": 2700,
         "maxPostTransitTime": 2700,
+        # Names of lines, stations and directions in this language, where the
+        # timetable data has translations (Japan's has English).
+        "language": lang,
     })
     itineraries = data.get("itineraries") or []
     best = min(itineraries, key=lambda it: it.get("duration", 1e9)) if itineraries else None
@@ -137,7 +145,7 @@ def plan_pair(a, b, date):
     return result
 
 
-def plan_day(points, date):
+def plan_day(points, date, lang="en"):
     """Same shape as an OpenRouteService answer (geometry, legs, totals), plus
     `parts` (to draw each line in its own colour). A leg is None when no
     journey was found; the app shows a straight line for that one."""
@@ -145,7 +153,7 @@ def plan_day(points, date):
     legs, parts, geometry, total = [], [], [], 0
     for a, b in list(zip(points, points[1:]))[:MAX_PAIRS]:
         try:
-            leg = plan_pair(a, b, date)
+            leg = plan_pair(a, b, date, lang)
         except UpstreamError:
             leg = None
         if leg is None:

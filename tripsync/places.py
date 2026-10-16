@@ -103,6 +103,17 @@ def cached(cache, kind, key, compute):
 
 # --- Search ----------------------------------------------------------------------
 
+# The languages the app offers for names (see the frontend's settings.js).
+LANGUAGES = {"en", "he", "es", "fr", "de", "it", "ja", "zh", "ko"}
+# Photon only knows a few; for the others its English names are the most useful.
+PHOTON_LANGUAGES = {"en", "de", "fr"}
+
+
+def request_language():
+    lang = (request.args.get("lang") or "en").lower()
+    return lang if lang in LANGUAGES else "en"
+
+
 # "W24341353": OSM element type (Node / Way / Relation) + its numeric ID.
 OSM_REF = re.compile(r"^[NWR]\d{1,15}$")
 
@@ -140,8 +151,8 @@ def to_result(feature):
     }
 
 
-def search_photon(q, lat, lng):
-    params = {"q": q, "limit": 10, "lang": "en"}
+def search_photon(q, lat, lng, lang="en"):
+    params = {"q": q, "limit": 10, "lang": lang if lang in PHOTON_LANGUAGES else "en"}
     if lat is not None:
         # Bias towards the trip (the map's centre or the trip's stops), so
         # "cathedral" finds the one in the city you're planning, not anywhere.
@@ -186,9 +197,10 @@ def search():
     if len(q) > 200:
         abort(400, "q is too long")
     lat, lng = optional_coord("lat", 90), optional_coord("lng", 180)
-    key = (q.lower(), lat, lng)
+    lang = request_language()
+    key = (q.lower(), lat, lng, lang if lang in PHOTON_LANGUAGES else "en")
     try:
-        return jsonify(cached(_search_cache, "search", key, lambda: search_photon(q, lat, lng)))
+        return jsonify(cached(_search_cache, "search", key, lambda: search_photon(q, lat, lng, lang)))
     except UpstreamError:
         abort(502, "Place search is unavailable right now. Try again in a moment.")
 
@@ -213,14 +225,22 @@ def wikipedia_summary(lang, title):
     }
 
 
-def wikidata_article(qid):
-    """English Wikipedia title for a Wikidata item, plus its image file (P18)."""
+def wikidata_article(qid, lang="en"):
+    """(language, Wikipedia title) for a Wikidata item, in the user's language
+    when that Wikipedia has an article, else English; plus its image (P18)."""
+    sites = f"{lang}wiki|enwiki" if lang != "en" else "enwiki"
     data = fetch_json("wikidata", WIKIDATA, {
         "action": "wbgetentities", "ids": qid, "props": "claims|sitelinks",
-        "sitefilter": "enwiki", "format": "json",
+        "sitefilter": sites, "format": "json",
     })
     entity = data.get("entities", {}).get(qid, {})
-    title = entity.get("sitelinks", {}).get("enwiki", {}).get("title")
+    links = entity.get("sitelinks", {})
+    if f"{lang}wiki" in links:
+        title = (lang, links[f"{lang}wiki"]["title"])
+    elif "enwiki" in links:
+        title = ("en", links["enwiki"]["title"])
+    else:
+        title = None
     image = None
     for claim in entity.get("claims", {}).get("P18", []):
         image = claim.get("mainsnak", {}).get("datavalue", {}).get("value")
@@ -266,17 +286,18 @@ def safe_url(value):
     return value if isinstance(value, str) and value.startswith(("https://", "http://")) else None
 
 
-def load_details(osm_ref):
+def load_details(osm_ref, lang="en"):
     rows = nominatim_json({
         "osm_ids": osm_ref, "format": "json", "extratags": 1, "namedetails": 1,
-        "addressdetails": 1, "accept-language": "en",
+        "addressdetails": 1, "accept-language": f"{lang},en",
     })
     if not rows:
         return None
     row = rows[0]
     tags = row.get("extratags") or {}
     names = row.get("namedetails") or {}
-    name = names.get("name:en") or names.get("name") or row.get("name") or row.get("display_name", "").split(",")[0]
+    name = (names.get(f"name:{lang}") or names.get("name:en") or names.get("name") or row.get("name")
+            or row.get("display_name", "").split(",")[0])
     lat, lng = float(row["lat"]), float(row["lon"])
     address = row.get("address") or {}
 
@@ -307,9 +328,9 @@ def load_details(osm_ref):
     try:
         summary, image = None, None
         if tags.get("wikidata"):
-            title, image = wikidata_article(tags["wikidata"])
+            title, image = wikidata_article(tags["wikidata"], lang)
             if title:
-                summary = wikipedia_summary("en", title)
+                summary = wikipedia_summary(*title)
         if not summary and ":" in tags.get("wikipedia", ""):
             lang, title = tags["wikipedia"].split(":", 1)
             if re.fullmatch(r"[a-z-]{2,12}", lang):
@@ -339,8 +360,9 @@ def load_details(osm_ref):
 def details(osm_ref):
     if not OSM_REF.match(osm_ref):
         abort(404)
+    lang = request_language()
     try:
-        result = cached(_details_cache, "details", osm_ref, lambda: load_details(osm_ref))
+        result = cached(_details_cache, "details", (osm_ref, lang), lambda: load_details(osm_ref, lang))
     except UpstreamError:
         abort(502, "Place details are unavailable right now. Try again in a moment.")
     if result is None:

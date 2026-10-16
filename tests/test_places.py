@@ -63,6 +63,7 @@ def upstream(monkeypatch):
                 del row[0]["extratags"]["wikidata"]
             return FakeResponse(row)
         if url == places.WIKIDATA:
+            state.setdefault("wikidata_sites", []).append(params["sitefilter"])
             return FakeResponse({"entities": {"Q215003": {
                 "sitelinks": {"enwiki": {"title": "Belém Tower"}},
                 "claims": {"P18": [{"mainsnak": {"datavalue": {"value": "Belem Tower.jpg"}}}]},
@@ -132,6 +133,18 @@ def test_details_combine_osm_and_wikipedia(client, alice, upstream):
     assert d["photo_url"] == "https://commons.wikimedia.org/wiki/Special:FilePath/Belem%20Tower.jpg?width=640"
     # A "javascript:" link in the map data must never reach the page.
     assert d["website"] is None
+
+
+def test_details_ask_wikipedia_in_the_users_language(client, alice, upstream):
+    d = client.get("/places/W24341353?lang=he", headers=alice).json
+    assert upstream["wikidata_sites"] == ["hewiki|enwiki"]
+    # No Hebrew article in the fake: falls back to the English description.
+    assert d["description"].startswith("A 16th-century")
+
+
+def test_unknown_language_falls_back_to_english(client, alice, upstream):
+    client.get("/places/W24341353?lang=xx", headers=alice)
+    assert upstream["wikidata_sites"] == ["enwiki"]
 
 
 def test_details_without_wikidata_match_by_name_nearby(client, alice, upstream):

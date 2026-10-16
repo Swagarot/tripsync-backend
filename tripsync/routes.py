@@ -26,7 +26,7 @@ from flask_jwt_extended import jwt_required
 from prometheus_client import Counter
 
 from .extensions import limiter
-from .places import session
+from .places import LANGUAGES, session
 from .transit import plan_day
 from .validation import Choice, Date, ValidationError, json_body
 
@@ -123,7 +123,8 @@ def route():
     points = parse_points(body.get("points"))
     if mode == "transit":
         date = Date().parse("date", body.get("date")) or dt.date.today()
-        return jsonify(plan_day(points, date))
+        lang = body.get("lang") if body.get("lang") in LANGUAGES else "en"
+        return jsonify(plan_day(points, date, lang))
     cache_key = (mode, tuple(points))
     with _lock:
         if cache_key in _cache:

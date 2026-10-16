@@ -69,9 +69,17 @@ def test_transit_route_picks_fastest_and_keeps_line_colours(client, alice, fake_
     assert res.status_code == 200
     leg = res.json["legs"][0]
     assert leg["duration_s"] == 1980
-    assert leg["steps"] == [{"mode": "SUBWAY", "line": "G", "title": "", "color": "#ff9500", "minutes": 17}]
+    assert leg["steps"] == [{"mode": "SUBWAY", "line": "G", "from": None, "to": None, "headsign": None,
+                             "title": "", "color": "#ff9500", "minutes": 17}]
     assert [p["mode"] for p in res.json["parts"]] == ["WALK", "SUBWAY"]
     assert fake_transitous[0]["maxPreTransitTime"] == 2700
+    assert fake_transitous[0]["language"] == "en"
+
+
+def test_transit_names_in_the_users_language(client, alice, fake_transitous):
+    body = {"mode": "transit", "points": [[35.68, 139.76], [35.65, 139.70]], "lang": "fr"}
+    client.post("/routes", json=body, headers=alice)
+    assert fake_transitous[0]["language"] == "fr"
 
 
 def test_transit_leg_without_journey_is_none(client, alice, fake_transitous):
