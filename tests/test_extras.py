@@ -115,3 +115,17 @@ def test_rates_down_is_502(client, alice, monkeypatch):
     monkeypatch.setattr(travelinfo, "fetch_json", down)
     travelinfo._rates_cache.clear()
     assert client.get("/rates?base=EUR", headers=alice).status_code == 502
+
+
+def test_lodging_dates_and_bookends(client, alice, trip_id):
+    body = {"name": "Hotel Gracery", "lat": 35.69, "lng": 139.70, "check_in": "2027-04-01", "check_out": "2027-04-05"}
+    res = client.post(f"/trips/{trip_id}/lodgings", json=body, headers=alice)
+    assert res.status_code == 201
+    assert res.json["bookends"] is True  # on by default
+    lid = res.json["id"]
+    assert client.patch(f"/lodgings/{lid}", json={"bookends": False}, headers=alice).json["bookends"] is False
+    # check_out before check_in is refused, on create and on update (against the stored check_in).
+    assert client.post(f"/trips/{trip_id}/lodgings", json={**body, "check_out": "2027-03-30"},
+                       headers=alice).status_code == 400
+    assert client.patch(f"/lodgings/{lid}", json={"check_out": "2027-03-01"}, headers=alice).status_code == 400
+    assert [s["name"] for s in get_trip(client, alice, trip_id)["lodgings"]] == ["Hotel Gracery"]

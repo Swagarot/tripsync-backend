@@ -7,7 +7,7 @@ serves them, with the kind in the URL:
   PATCH  /<kind>/<id>                change some fields
   DELETE /<kind>/<id>                soft delete
 
-kind = ideas | expenses | checklist. They come back inside GET /trips/<id>.
+kind = ideas | expenses | checklist | lodgings. They come back inside GET /trips/<id>.
 Same security rule as trips.py: rows are only found through the logged-in
 user's own trips, so anyone else's id is a 404.
 """
@@ -18,7 +18,7 @@ from flask_jwt_extended import jwt_required
 from sqlalchemy import func, select
 
 from .extensions import db
-from .models import ChecklistItem, Expense, SavedPlace, Trip, utcnow
+from .models import ChecklistItem, Expense, Lodging, SavedPlace, Trip, utcnow
 from .trips import already_created, find_trip, owned
 from .auth import current_user_id
 from .validation import Bool, Choice, Currency, Date, Number, Text, Url, ValidationError, load
@@ -58,8 +58,21 @@ KINDS = {
         "text": Text(300, required=True),
         "done": Bool(nullable=False),
     }),
+    "lodgings": (Lodging, {
+        "name": Text(200, required=True),
+        "lat": Number(-90, 90),
+        "lng": Number(-180, 180),
+        "address": Text(500),
+        "osm_ref": Text(32),
+        "category": Text(64),
+        "photo_url": Url(1000),
+        "website": Url(500),
+        "check_in": Date(),
+        "check_out": Date(),
+        "bookends": Bool(nullable=False),
+    }),
 }
-KIND_PATTERN = "<any(ideas, expenses, checklist):kind>"
+KIND_PATTERN = "<any(ideas, expenses, checklist, lodgings):kind>"
 
 
 def find_child(model, row_id):
@@ -71,6 +84,11 @@ def find_child(model, row_id):
             Trip.deleted_at.is_(None),
         )
     )
+
+
+def check_stay(data):
+    if data.get("check_in") and data.get("check_out") and data["check_out"] < data["check_in"]:
+        raise ValidationError("check_out must not be before check_in")
 
 
 def prepare(data):
@@ -88,6 +106,7 @@ def create(trip_id, kind):
     if existing:
         return jsonify(existing.to_dict())
     data = prepare(load(fields))
+    check_stay(data)
     if model is ChecklistItem:
         highest = db.session.scalar(
             select(func.max(ChecklistItem.position)).where(
@@ -106,7 +125,10 @@ def create(trip_id, kind):
 def update(kind, row_id):
     model, fields = KINDS[kind]
     row = find_child(model, row_id) or abort(404)
-    for key, value in prepare(load(fields, partial=True)).items():
+    data = prepare(load(fields, partial=True))
+    if model is Lodging:
+        check_stay({"check_in": data.get("check_in", row.check_in), "check_out": data.get("check_out", row.check_out)})
+    for key, value in data.items():
         if value is None and fields[key].required:
             raise ValidationError(f"{key} is required")
         setattr(row, key, value)

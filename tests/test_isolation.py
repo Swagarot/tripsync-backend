@@ -18,8 +18,9 @@ def alices_data(client, alice):
     expense = client.post(f"/trips/{trip['id']}/expenses", json={
         "amount": 12.5, "currency": "EUR", "category": "food"}, headers=alice).json
     item = client.post(f"/trips/{trip['id']}/checklist", json={"text": "Alice's passport"}, headers=alice).json
+    stay = client.post(f"/trips/{trip['id']}/lodgings", json={"name": "Alice's hotel"}, headers=alice).json
     return {"trip": trip["id"], "day": day["id"], "stop": stop["id"],
-            "idea": idea["id"], "expense": expense["id"], "item": item["id"]}
+            "idea": idea["id"], "expense": expense["id"], "item": item["id"], "stay": stay["id"]}
 
 
 ENDPOINTS = [
@@ -43,6 +44,9 @@ ENDPOINTS = [
     ("post", "/trips/{trip}/checklist", {"text": "hacked"}),
     ("patch", "/checklist/{item}", {"done": True}),
     ("delete", "/checklist/{item}", None),
+    ("post", "/trips/{trip}/lodgings", {"name": "hacked"}),
+    ("patch", "/lodgings/{stay}", {"name": "hacked"}),
+    ("delete", "/lodgings/{stay}", None),
 ]
 
 
@@ -72,6 +76,7 @@ def test_other_users_rows_are_404(client, alice, bob, alices_data, method, url, 
     assert [i["name"] for i in trip["ideas"]] == ["Alice's idea"]
     assert [e["amount"] for e in trip["expenses"]] == [12.5]
     assert [(c["text"], c["done"]) for c in trip["checklist"]] == [("Alice's passport", False)]
+    assert [s["name"] for s in trip["lodgings"]] == ["Alice's hotel"]
 
 
 def test_trip_list_only_shows_own_trips(client, alice, bob, alices_data):
@@ -88,7 +93,7 @@ def test_cannot_move_own_stop_into_other_users_day(client, bob, alices_data):
     assert res.status_code == 400
 
 
-@pytest.mark.parametrize("kind", ["trip", "day", "stop", "idea", "expense", "item"])
+@pytest.mark.parametrize("kind", ["trip", "day", "stop", "idea", "expense", "item", "stay"])
 def test_cannot_take_over_an_id_by_creating_with_it(client, alice, bob, alices_data, kind):
     # Bob guesses (or sees) one of Alice's IDs and tries to create a row with
     # it. The "retry is harmless" path must not hand him Alice's row.
@@ -96,7 +101,7 @@ def test_cannot_take_over_an_id_by_creating_with_it(client, alice, bob, alices_d
     day = client.post(f"/trips/{trip['id']}/days", json={}, headers=bob).json
     url = {"trip": "/trips", "day": f"/trips/{trip['id']}/days", "stop": f"/days/{day['id']}/stops",
            "idea": f"/trips/{trip['id']}/ideas", "expense": f"/trips/{trip['id']}/expenses",
-           "item": f"/trips/{trip['id']}/checklist"}[kind]
+           "item": f"/trips/{trip['id']}/checklist", "stay": f"/trips/{trip['id']}/lodgings"}[kind]
     body = {"name": "hacked", "text": "hacked", "amount": 1, "currency": "EUR", "category": "food"}
     res = client.post(url, json={"id": alices_data[kind], **body}, headers=bob)
     assert res.status_code == 409

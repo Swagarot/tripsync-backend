@@ -76,6 +76,7 @@ FULL_TRIP = (
     selectinload(Trip.ideas),
     selectinload(Trip.expenses),
     selectinload(Trip.checklist),
+    selectinload(Trip.lodgings),
 )
 
 

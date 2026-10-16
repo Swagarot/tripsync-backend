@@ -74,6 +74,7 @@ class Trip(SyncColumns, db.Model):
     ideas: Mapped[list["SavedPlace"]] = relationship(order_by="SavedPlace.created_at")
     expenses: Mapped[list["Expense"]] = relationship(order_by="Expense.created_at")
     checklist: Mapped[list["ChecklistItem"]] = relationship(order_by="ChecklistItem.position")
+    lodgings: Mapped[list["Lodging"]] = relationship(order_by="Lodging.check_in")
 
     def to_dict(self, include_days=False):
         data = {
@@ -97,6 +98,7 @@ class Trip(SyncColumns, db.Model):
             data["ideas"] = live(self.ideas)
             data["expenses"] = live(self.expenses)
             data["checklist"] = live(self.checklist)
+            data["lodgings"] = live(self.lodgings)
         return data
 
 
@@ -263,3 +265,33 @@ class StopPhoto(SyncColumns, db.Model):
     width: Mapped[int] = mapped_column(Integer)
     height: Mapped[int] = mapped_column(Integer)
     size_bytes: Mapped[int] = mapped_column(Integer)
+
+
+class Lodging(TripChild, db.Model):
+    """Where you sleep from check_in to check_out (a hotel, an apartment...).
+    With `bookends`, every day in that range starts and ends there: the app adds
+    it to the day's route and travel times."""
+    __tablename__ = "lodgings"
+
+    name: Mapped[str] = mapped_column(String(200))
+    lat: Mapped[float | None] = mapped_column(Float)
+    lng: Mapped[float | None] = mapped_column(Float)
+    address: Mapped[str | None] = mapped_column(String(500))
+    osm_ref: Mapped[str | None] = mapped_column(String(32))
+    category: Mapped[str | None] = mapped_column(String(64))
+    photo_url: Mapped[str | None] = mapped_column(String(1000))
+    website: Mapped[str | None] = mapped_column(String(500))
+    check_in: Mapped[dt.date | None] = mapped_column(Date)
+    check_out: Mapped[dt.date | None] = mapped_column(Date)
+    bookends: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+
+    def to_dict(self):
+        return {
+            **self.base_dict(),
+            **{k: getattr(self, k) for k in (
+                "name", "lat", "lng", "address", "osm_ref", "category", "photo_url", "website",
+            )},
+            "check_in": iso(self.check_in),
+            "check_out": iso(self.check_out),
+            "bookends": bool(self.bookends),
+        }
