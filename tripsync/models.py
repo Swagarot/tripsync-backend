@@ -56,6 +56,12 @@ class Trip(SyncColumns, db.Model):
     start_date: Mapped[dt.date | None] = mapped_column(Date)
     end_date: Mapped[dt.date | None] = mapped_column(Date)
     notes: Mapped[str | None] = mapped_column(Text)
+    # "Where to?": picked from place search when the trip is created. Centres
+    # the map before there are any stops and biases place search towards it.
+    destination: Mapped[str | None] = mapped_column(String(200))
+    dest_lat: Mapped[float | None] = mapped_column(Float)
+    dest_lng: Mapped[float | None] = mapped_column(Float)
+    dest_zoom: Mapped[float | None] = mapped_column(Float)  # country ~5, city ~11
 
     days: Mapped[list["Day"]] = relationship(back_populates="trip", order_by="Day.position")
 
@@ -66,6 +72,10 @@ class Trip(SyncColumns, db.Model):
             "start_date": iso(self.start_date),
             "end_date": iso(self.end_date),
             "notes": self.notes,
+            "destination": self.destination,
+            "dest_lat": self.dest_lat,
+            "dest_lng": self.dest_lng,
+            "dest_zoom": self.dest_zoom,
             "created_at": iso(self.created_at),
             "updated_at": iso(self.updated_at),
         }

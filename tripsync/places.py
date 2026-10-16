@@ -117,9 +117,18 @@ def format_address(p):
     return ", ".join(x for x in parts if x) or None
 
 
+# How far to zoom the map to show a place: a country needs a wide view, a
+# café a close one. Used when a search result becomes a trip's destination.
+ZOOM_BY_TYPE = {
+    "continent": 3, "country": 5, "state": 7, "region": 7, "province": 7, "county": 9,
+    "city": 11, "town": 13, "municipality": 11, "village": 14, "suburb": 14, "island": 10,
+}
+
+
 def to_result(feature):
     p = feature.get("properties", {})
     lng, lat = feature["geometry"]["coordinates"]
+    place_type = p.get("type") if p.get("osm_key") == "place" else p.get("osm_value")
     return {
         "osm_ref": f"{p['osm_type']}{p['osm_id']}",
         "name": p["name"],
@@ -127,6 +136,7 @@ def to_result(feature):
         "address": format_address(p),
         "lat": round(lat, 6),
         "lng": round(lng, 6),
+        "zoom": ZOOM_BY_TYPE.get(place_type, ZOOM_BY_TYPE.get(p.get("osm_value"), 15)),
     }
 
 

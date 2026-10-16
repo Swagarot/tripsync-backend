@@ -32,6 +32,10 @@ TRIP_FIELDS = {
     "start_date": Date(),
     "end_date": Date(),
     "notes": Text(5000),
+    "destination": Text(200),
+    "dest_lat": Number(-90, 90),
+    "dest_lng": Number(-180, 180),
+    "dest_zoom": Number(1, 18),
 }
 DAY_FIELDS = {
     "date": Date(),

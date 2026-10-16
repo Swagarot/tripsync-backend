@@ -47,6 +47,14 @@ def test_update_trip_only_changes_sent_fields(client, alice, trip):
     assert res.json["updated_at"] >= trip["updated_at"]
 
 
+def test_destination_is_stored(client, alice):
+    body = {"name": "Trip to Japan", "destination": "Japan", "dest_lat": 36.5, "dest_lng": 139.0, "dest_zoom": 5}
+    res = client.post("/trips", json=body, headers=alice)
+    assert res.status_code == 201
+    assert res.json["destination"] == "Japan" and res.json["dest_zoom"] == 5
+    assert client.post("/trips", json={**body, "dest_zoom": 40}, headers=alice).status_code == 400
+
+
 def test_empty_optional_text_becomes_null(client, alice, trip):
     res = client.patch(f"/trips/{trip['id']}", json={"notes": "   "}, headers=alice)
     assert res.json["notes"] is None

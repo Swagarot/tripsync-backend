@@ -94,7 +94,7 @@ def test_search_returns_clean_results(client, alice, upstream):
     assert res.status_code == 200
     assert res.json == [{
         "osm_ref": "W24341353", "name": "Tower of Belém", "category": "Attraction",
-        "address": "Avenida de Brasília, Lisbon, Portugal", "lat": 38.691586, "lng": -9.215929,
+        "address": "Avenida de Brasília, Lisbon, Portugal", "lat": 38.691586, "lng": -9.215929, "zoom": 15,
     }]
 
 
