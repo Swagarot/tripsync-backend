@@ -119,6 +119,45 @@ def summarize(itinerary):
     }
 
 
+# A change of train costs more than its minutes: finding the platform, the
+# risk of missing the connection. Journeys are compared as if each change
+# took this much extra time.
+CHANGE_PENALTY_S = 7 * 60
+
+
+def _stations(itinerary):
+    return [
+        (leg.get(end) or {}).get("name", "").strip().lower()
+        for leg in itinerary.get("legs", []) if leg.get("mode") != "WALK"
+        for end in ("from", "to")
+    ]
+
+
+def has_loop(itinerary):
+    """True if a journey rides back to a station it already passed (e.g.
+    Terminal 3 -> Tenkubashi -> Terminal 3). The router can produce these when a
+    stop's pin is far from any station; nobody would actually travel that way."""
+    stations = _stations(itinerary)
+    # Each ride's start and end; consecutive rides share a station when you
+    # change trains there, which is fine. A station seen in two different
+    # rides that aren't neighbours, or a ride ending where an earlier ride
+    # started, is a loop.
+    rides = [stations[i:i + 2] for i in range(0, len(stations), 2)]
+    seen = set()
+    for i, (start, end) in enumerate(rides):
+        if end in seen or (start in seen and i > 0 and start != rides[i - 1][1]):
+            return True
+        seen.update((start, end))
+    return False
+
+
+def best_itinerary(itineraries):
+    """The journey a person would pick: no loops, then the shortest time
+    counting each change as CHANGE_PENALTY_S extra."""
+    sensible = [it for it in itineraries if not has_loop(it)] or itineraries
+    return min(sensible, key=lambda it: it.get("duration", 1e9) + CHANGE_PENALTY_S * it.get("transfers", 0))
+
+
 def plan_pair(a, b, date, lang="en"):
     key = (a, b, date, lang)
     with _lock:
@@ -128,7 +167,7 @@ def plan_pair(a, b, date, lang="en"):
         "fromPlace": f"{a[0]},{a[1]}",
         "toPlace": f"{b[0]},{b[1]}",
         "time": departure_time(date, a[1]),
-        "numItineraries": 3,
+        "numItineraries": 5,
         # Allow up to 45 min of walking to the first stop / from the last one:
         # a big place's pin can be far from its entrance or the nearest station.
         "maxPreTransitTime": 2700,
@@ -138,7 +177,7 @@ def plan_pair(a, b, date, lang="en"):
         "language": lang,
     })
     itineraries = data.get("itineraries") or []
-    best = min(itineraries, key=lambda it: it.get("duration", 1e9)) if itineraries else None
+    best = best_itinerary(itineraries) if itineraries else None
     result = summarize(best) if best else None
     with _lock:
         _cache[key] = result

@@ -8,6 +8,7 @@ to someone else can't even be confirmed.
 from flask import Blueprint, abort, jsonify
 from flask_jwt_extended import jwt_required
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 
 from .auth import current_user_id
 from .extensions import db
@@ -63,6 +64,30 @@ STOP_FIELDS = {
 
 
 # --- Ownership-checked lookups ---------------------------------------------
+
+# Everything the trip page shows, loaded up front in a fixed number of queries
+# ("eager loading"). Without it, SQLAlchemy loads each day's stops and each
+# stop's photos on first access: one query per day plus one per stop (the
+# "N+1 query" problem), 40 queries for a 5-day trip, hundreds for a long one,
+# each a network round trip to Postgres. selectinload fetches each level for
+# all parents at once (WHERE day_id IN (...)): 7 queries, whatever the size.
+FULL_TRIP = (
+    selectinload(Trip.days).selectinload(Day.stops).selectinload(Stop.photos),
+    selectinload(Trip.ideas),
+    selectinload(Trip.expenses),
+    selectinload(Trip.checklist),
+)
+
+
+def find_full_trip(trip_id):
+    return db.session.scalar(
+        select(Trip).options(*FULL_TRIP).where(
+            Trip.id == trip_id,
+            Trip.user_id == current_user_id(),
+            Trip.deleted_at.is_(None),
+        )
+    )
+
 
 def find_trip(trip_id):
     return db.session.scalar(
@@ -213,7 +238,7 @@ def create_trip():
 def get_trip(trip_id):
     # The whole trip in one response (days with their stops), which is what
     # the trip page and, later, the offline cache need.
-    return jsonify(owned(find_trip, trip_id).to_dict(include_days=True))
+    return jsonify(owned(find_full_trip, trip_id).to_dict(include_days=True))
 
 
 @bp.patch("/trips/<uuid:trip_id>")

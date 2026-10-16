@@ -117,3 +117,39 @@ def test_day_accepts_transit_mode(client, alice):
     trip = client.post("/trips", json={"name": "T"}, headers=alice).json
     day = client.post(f"/trips/{trip['id']}/days", json={"travel_mode": "transit"}, headers=alice)
     assert day.status_code == 201 and day.json["travel_mode"] == "transit"
+
+
+def ride(mode, start, end, minutes):
+    return {"mode": mode, "from": {"name": start}, "to": {"name": end}, "duration": minutes * 60}
+
+
+def walk(minutes):
+    return {"mode": "WALK", "from": {"name": "a"}, "to": {"name": "b"}, "duration": minutes * 60}
+
+
+# Haneda (pin on the airfield) -> Tokyo Tower, as Transitous really answered.
+DIRECT = {"duration": 62 * 60, "transfers": 0,
+          "legs": [walk(19), ride("REGIONAL_RAIL", "Haneda Airport Terminal 3", "Daimon", 26), walk(17)]}
+HOP = {"duration": 50 * 60, "transfers": 2,
+       "legs": [walk(19), ride("REGIONAL_RAIL", "Haneda Airport Terminal 3", "Haneda Airport Terminal 1·2", 2), walk(2),
+                ride("OTHER", "Haneda Airport Terminal 1·2", "Hamamatsucho", 13), walk(2),
+                ride("SUBWAY", "Daimon", "Akabanebashi", 2), walk(10)]}
+LOOP = {"duration": 48 * 60, "transfers": 2,
+        "legs": [walk(19), ride("REGIONAL_RAIL", "Haneda Airport Terminal 3", "Tenkubashi", 1),
+                 ride("REGIONAL_RAIL", "Tenkubashi", "Haneda Airport Terminal 3", 1),
+                 ride("OTHER", "Haneda Airport Terminal 3", "Hamamatsucho", 13), walk(12)]}
+
+
+def test_loops_are_detected():
+    assert transit.has_loop(LOOP)
+    assert not transit.has_loop(HOP)
+    assert not transit.has_loop(DIRECT)
+
+
+def test_best_itinerary_prefers_fewer_changes_and_no_loops():
+    # The loop is "fastest" (48 min) and the hop 50 min with 2 changes; the
+    # direct train (62 min, no changes) is what a person would take.
+    assert transit.best_itinerary([LOOP, HOP, DIRECT]) is DIRECT
+    # But a much faster journey still wins despite a change.
+    quick = dict(HOP, duration=30 * 60, transfers=1)
+    assert transit.best_itinerary([DIRECT, quick]) is quick

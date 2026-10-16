@@ -200,3 +200,36 @@ def test_reorder_and_delete_stops(client, alice, trip):
     assert client.delete(f"/stops/{ids[1]}", headers=alice).status_code == 204
     stops = client.get(f"/trips/{trip['id']}", headers=alice).json["days"][0]["stops"]
     assert [s["name"] for s in stops] == ["C", "A"]
+
+
+def test_trip_page_query_count_does_not_grow_with_the_trip(app, client, alice):
+    # Guards against the N+1 query problem: loading a trip must cost the same
+    # number of queries for 1 stop or 30.
+    from sqlalchemy import event
+
+    from tripsync.extensions import db
+
+    def queries_for(trip_id):
+        count = {"n": 0}
+
+        def bump(*args, **kwargs):
+            count["n"] += 1
+
+        with app.app_context():
+            event.listen(db.engine, "before_cursor_execute", bump)
+            try:
+                client.get(f"/trips/{trip_id}", headers=alice)
+            finally:
+                event.remove(db.engine, "before_cursor_execute", bump)
+        return count["n"]
+
+    def make_trip(days, stops):
+        trip = client.post("/trips", json={"name": "T"}, headers=alice).json["id"]
+        for _ in range(days):
+            day = client.post(f"/trips/{trip}/days", json={}, headers=alice).json["id"]
+            for i in range(stops):
+                client.post(f"/days/{day}/stops", json={"name": f"s{i}"}, headers=alice)
+        return trip
+
+    small, big = queries_for(make_trip(1, 1)), queries_for(make_trip(5, 6))
+    assert small == big <= 8
