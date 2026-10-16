@@ -15,6 +15,7 @@ Helm chart from `tripsync-devops`.
 | `tripsync/trips.py` | Trip/day/stop CRUD + reorder; every lookup is owner-checked |
 | `tripsync/validation.py` | Request body validation |
 | `tripsync/places.py` | Place search/details via OpenStreetMap services + Wikipedia, cached |
+| `tripsync/routes.py` | Routes and travel times (OpenRouteService, key from env `ORS_API_KEY`), cached |
 | `migrations/` | Alembic migrations (`flask db ...`) |
 | `tests/` | pytest; `test_isolation.py` proves users can't reach each other's data |
 
@@ -31,6 +32,7 @@ POST   /days/<id>/stops          PUT /days/<id>/stops/order     {ids: [...]}
 PATCH  /stops/<id>               DELETE /stops/<id>             (PATCH {day_id} moves a stop)
 GET    /places/search?q=&lat=&lng=   place search (Photon / OpenStreetMap)
 GET    /places/<N|W|R><osm id>       details: hours, website, photo, description
+POST   /routes  {mode: walk|bike|drive, points: [[lat, lng], ...]}  route + travel times (OpenRouteService)
 GET    /health  /health/live  /health/ready  /metrics   (/metrics is not on the Ingress)
 ```
 
