@@ -97,8 +97,13 @@ def fetch_route(mode, points):
 
     feature = res.json()["features"][0]
     props = feature["properties"]
+    geometry = [[round(lat, 5), round(lng, 5)] for lng, lat, *_ in feature["geometry"]["coordinates"]]
     return {
-        "geometry": [[round(lat, 5), round(lng, 5)] for lng, lat, *_ in feature["geometry"]["coordinates"]],
+        "geometry": geometry,
+        # Where each stop joined the road network (way_points = indexes into
+        # the geometry). With the 2 km search radius this can be far from the
+        # stop's pin; the map draws a dotted line between the two.
+        "snapped": [geometry[i] for i in props.get("way_points", []) if i < len(geometry)],
         # One leg per pair of consecutive stops (turn-by-turn steps dropped).
         "legs": [
             {"distance_m": round(s.get("distance", 0)), "duration_s": round(s.get("duration", 0))}

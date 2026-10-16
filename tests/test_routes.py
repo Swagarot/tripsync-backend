@@ -9,6 +9,7 @@ ORS_ANSWER = {
         "geometry": {"coordinates": [[-9.21593, 38.69159], [-9.21, 38.695], [-9.2066, 38.69786]]},
         "properties": {
             "segments": [{"distance": 1353.4, "duration": 974.2}],
+            "way_points": [0, 2],
             "summary": {"distance": 1353.4, "duration": 974.2},
         },
     }]
@@ -48,6 +49,8 @@ def test_route_returns_legs_and_lat_lng_geometry(client, alice, ors):
     assert res.status_code == 200
     assert res.json["legs"] == [{"distance_m": 1353, "duration_s": 974}]
     assert res.json["geometry"][0] == [38.69159, -9.21593]  # flipped back to [lat, lng]
+    # Where each stop met the road: the geometry points at way_points.
+    assert res.json["snapped"] == [[38.69159, -9.21593], [38.69786, -9.2066]]
     call = ors["calls"][0]
     assert call["url"].endswith("/foot-walking/geojson")
     assert call["json"]["coordinates"][0] == [-9.21593, 38.69159]  # ORS wants [lng, lat]
