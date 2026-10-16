@@ -85,3 +85,14 @@ def test_login_is_rate_limited_per_client_ip(client):
     # This proves ProxyFix works: without it every request would come from the
     # proxy's address and one attacker could lock everyone out.
     assert login(client, headers=ip_b).status_code == 200
+
+
+def test_rate_limit_uses_cloudflare_client_ip(client):
+    # Through the tunnel, all requests arrive from the same cloudflared pod;
+    # only CF-Connecting-IP tells visitors apart.
+    register(client)
+    same_proxy = {"X-Forwarded-For": "10.42.1.50"}
+    for _ in range(10):
+        login(client, password="wrong-password", headers={**same_proxy, "CF-Connecting-IP": "198.51.100.7"})
+    assert login(client, headers={**same_proxy, "CF-Connecting-IP": "198.51.100.7"}).status_code == 429
+    assert login(client, headers={**same_proxy, "CF-Connecting-IP": "198.51.100.8"}).status_code == 200
