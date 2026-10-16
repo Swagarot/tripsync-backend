@@ -4,3 +4,7 @@ venv/
 .env
 .vscode/
 .idea/
+.venv/
+*.db
+.pytest_cache/
+instance/

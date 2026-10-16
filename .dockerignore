@@ -7,3 +7,7 @@ venv/
 .git
 .vscode/
 .idea/
+*.db
+.pytest_cache/
+tests/
+instance/

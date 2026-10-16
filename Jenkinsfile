@@ -76,7 +76,46 @@ pipeline {
             }
         }
 
-        // Unit tests (pytest) go here in Week 6.
+        stage('Unit tests') {
+            environment {
+                // One private Docker network + database per build, so nothing
+                // is shared with other builds and cleanup is just two removals.
+                TEST_NET = "tripsync-pytest-${env.BUILD_NUMBER}"
+            }
+            steps {
+                // Tests run against real Postgres (same major version as the
+                // cluster), not SQLite: the schema is created by the actual
+                // migrations (`flask db upgrade`), so a broken migration fails
+                // here instead of in the init container during a deploy.
+                // The DB password is a throwaway for a container that lives a
+                // minute and is reachable only on its private network.
+                sh '''
+                    docker network create "$TEST_NET"
+                    docker run -d --name "$TEST_NET-db" --network "$TEST_NET" \
+                      -e POSTGRES_USER=test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=test \
+                      postgres:18-alpine
+                    for i in $(seq 1 30); do
+                      docker exec "$TEST_NET-db" pg_isready -U test -q && break
+                      sleep 2
+                    done
+                    docker run --rm --network "$TEST_NET" -u $(id -u):$(id -g) -e HOME=/tmp \
+                      -e POSTGRES_HOST="$TEST_NET-db" -e POSTGRES_USER=test \
+                      -e POSTGRES_PASSWORD=test -e POSTGRES_DB=test -e JWT_SECRET_KEY=test \
+                      -e TEST_DATABASE_URL="postgresql+psycopg://test:test@$TEST_NET-db:5432/test" \
+                      -v "$PWD/backend:/src" -w /src python:3.11-slim \
+                      sh -c "pip install --user -q -r requirements-dev.txt \
+                             && python -m flask db upgrade \
+                             && python -m pytest -q --junitxml=test-results.xml"
+                '''
+            }
+            post {
+                always {
+                    // Test results show up on the build page (JUnit plugin).
+                    junit allowEmptyResults: true, testResults: 'backend/test-results.xml'
+                    sh 'docker rm -f "$TEST_NET-db" || true; docker network rm "$TEST_NET" || true'
+                }
+            }
+        }
 
         stage('Set image tag') {
             steps {
@@ -151,6 +190,8 @@ pipeline {
                                 // touched. It holds no secret: kubectl/helm run
                                 // 'aws eks get-token' with the keys above.
                                 // On EKS the release is stored in 'tripsync'.
+                                // Postgres's disk is a gp3 EBS volume there
+                                // (StorageClass made by terraform/aws), not Longhorn.
                                 sh '''
                                     export AWS_DEFAULT_REGION=eu-central-1
                                     export KUBECONFIG="$WORKSPACE/kubeconfig-eks"
@@ -159,6 +200,7 @@ pipeline {
                                     helm upgrade --install tripsync devops/k8s-helm/tripsync -n tripsync \
                                       --reset-then-reuse-values \
                                       --set-string backend.image.tag=$IMAGE_TAG \
+                                      --set postgres.storageClassName=gp3 \
                                       --atomic --timeout 3m
                                     kubectl get pods -n tripsync
                                 '''

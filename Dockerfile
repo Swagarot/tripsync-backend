@@ -13,8 +13,19 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Now copy the rest of your actual app code
+# Now copy the rest of your actual app code (tests/ and local files are
+# left out by .dockerignore)
 COPY . .
+
+# Run as an unprivileged user instead of root. If someone ever finds a way to
+# run code through the app, they get a user that owns nothing and can't install
+# anything. A fixed numeric UID lets Kubernetes verify it (runAsNonRoot).
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin tripsync
+USER 10001
+
+# Lets `flask db upgrade` (run by the init container, see the Helm chart)
+# find the app without extra flags.
+ENV FLASK_APP=app.py
 
 # Documents which port this container listens on (doesn't actually
 # publish it — that happens at "docker run" time — but it's good practice)

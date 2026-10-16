@@ -1,0 +1,273 @@
+"""Trips, days and stops: create, read, update, delete, reorder.
+
+Security rule for this whole file: a row is only ever loaded through one of the
+owned_*() helpers, which filter on the logged-in user. Someone asking for
+another user's trip gets 404, exactly as if it didn't exist, so IDs that belong
+to someone else can't even be confirmed.
+"""
+from flask import Blueprint, abort, jsonify
+from flask_jwt_extended import jwt_required
+from sqlalchemy import func, select
+
+from .auth import current_user_id
+from .extensions import db
+from .models import Day, Stop, Trip, utcnow
+from .validation import Date, Number, Text, Time, ValidationError, json_body, load, optional_id, parse_uuid
+
+bp = Blueprint("trips", __name__)
+
+
+# Every route in this blueprint needs a valid token. Without one,
+# flask-jwt-extended answers 401 before the view runs.
+@bp.before_request
+@jwt_required()
+def require_login():
+    pass
+
+
+TRIP_FIELDS = {
+    "name": Text(200, required=True),
+    "start_date": Date(),
+    "end_date": Date(),
+    "notes": Text(5000),
+}
+DAY_FIELDS = {
+    "date": Date(),
+    "title": Text(200),
+    "notes": Text(5000),
+}
+STOP_FIELDS = {
+    "name": Text(200, required=True),
+    "lat": Number(-90, 90),
+    "lng": Number(-180, 180),
+    "address": Text(500),
+    "time": Time(),
+    "notes": Text(5000),
+}
+
+
+# --- Ownership-checked lookups ---------------------------------------------
+
+def find_trip(trip_id):
+    return db.session.scalar(
+        select(Trip).where(
+            Trip.id == trip_id,
+            Trip.user_id == current_user_id(),
+            Trip.deleted_at.is_(None),
+        )
+    )
+
+
+def find_day(day_id):
+    # A day has no user_id of its own; ownership comes from its trip.
+    return db.session.scalar(
+        select(Day).join(Day.trip).where(
+            Day.id == day_id,
+            Day.deleted_at.is_(None),
+            Trip.user_id == current_user_id(),
+            Trip.deleted_at.is_(None),
+        )
+    )
+
+
+def find_stop(stop_id):
+    return db.session.scalar(
+        select(Stop).join(Stop.day).join(Day.trip).where(
+            Stop.id == stop_id,
+            Stop.deleted_at.is_(None),
+            Day.deleted_at.is_(None),
+            Trip.user_id == current_user_id(),
+            Trip.deleted_at.is_(None),
+        )
+    )
+
+
+def owned(find, row_id):
+    row = find(row_id)
+    if row is None:
+        abort(404)
+    return row
+
+
+def already_created(model, find):
+    """Handle a client-chosen ID on create.
+
+    Returns the existing row if this user already created it (an offline phone
+    retrying a request whose response it never got, so the retry is harmless),
+    None if the ID is new, and 409 if the ID is taken by something else.
+    """
+    new_id = optional_id()
+    if new_id is None or db.session.get(model, new_id) is None:
+        return new_id, None
+    existing = find(new_id)
+    if existing is None:
+        abort(409, "id is already in use")
+    return new_id, existing
+
+
+def next_position(column, parent_column, parent_id):
+    # Append at the end: one more than the highest position of the live rows.
+    highest = db.session.scalar(
+        select(func.max(column)).where(parent_column == parent_id, column.class_.deleted_at.is_(None))
+    )
+    return 0 if highest is None else highest + 1
+
+
+def check_dates(start, end):
+    if start and end and end < start:
+        raise ValidationError("end_date must not be before start_date")
+
+
+def reorder(rows, what):
+    """Set positions from the body's "ids" list, which must name every row once."""
+    ids = json_body().get("ids")
+    if not isinstance(ids, list):
+        raise ValidationError("ids must be a list")
+    ids = [parse_uuid("ids", i) for i in ids]
+    by_id = {row.id: row for row in rows}
+    if len(ids) != len(by_id) or set(ids) != set(by_id):
+        raise ValidationError(f"ids must list every {what} exactly once")
+    for position, row_id in enumerate(ids):
+        by_id[row_id].position = position
+    db.session.commit()
+
+
+def soft_delete(row):
+    row.deleted_at = utcnow()
+    db.session.commit()
+    return "", 204
+
+
+# --- Trips -----------------------------------------------------------------
+
+@bp.get("/trips")
+def list_trips():
+    trips = db.session.scalars(
+        select(Trip)
+        .where(Trip.user_id == current_user_id(), Trip.deleted_at.is_(None))
+        .order_by(Trip.created_at.desc())
+    )
+    return jsonify([t.to_dict() for t in trips])
+
+
+@bp.post("/trips")
+def create_trip():
+    new_id, existing = already_created(Trip, find_trip)
+    if existing:
+        return jsonify(existing.to_dict(include_days=True))
+    data = load(TRIP_FIELDS)
+    check_dates(data.get("start_date"), data.get("end_date"))
+    trip = Trip(id=new_id, user_id=current_user_id(), **data)
+    db.session.add(trip)
+    db.session.commit()
+    return jsonify(trip.to_dict(include_days=True)), 201
+
+
+@bp.get("/trips/<uuid:trip_id>")
+def get_trip(trip_id):
+    # The whole trip in one response (days with their stops), which is what
+    # the trip page and, later, the offline cache need.
+    return jsonify(owned(find_trip, trip_id).to_dict(include_days=True))
+
+
+@bp.patch("/trips/<uuid:trip_id>")
+def update_trip(trip_id):
+    trip = owned(find_trip, trip_id)
+    data = load(TRIP_FIELDS, partial=True)
+    check_dates(data.get("start_date", trip.start_date), data.get("end_date", trip.end_date))
+    for key, value in data.items():
+        setattr(trip, key, value)
+    db.session.commit()
+    return jsonify(trip.to_dict(include_days=True))
+
+
+@bp.delete("/trips/<uuid:trip_id>")
+def delete_trip(trip_id):
+    # Its days and stops stay as they are: every lookup goes through the trip,
+    # so they become unreachable together with it.
+    return soft_delete(owned(find_trip, trip_id))
+
+
+# --- Days ------------------------------------------------------------------
+
+@bp.post("/trips/<uuid:trip_id>/days")
+def create_day(trip_id):
+    trip = owned(find_trip, trip_id)
+    new_id, existing = already_created(Day, find_day)
+    if existing:
+        return jsonify(existing.to_dict(include_stops=True))
+    data = load(DAY_FIELDS)
+    day = Day(id=new_id, trip_id=trip.id, position=next_position(Day.position, Day.trip_id, trip.id), **data)
+    db.session.add(day)
+    db.session.commit()
+    return jsonify(day.to_dict(include_stops=True)), 201
+
+
+@bp.patch("/days/<uuid:day_id>")
+def update_day(day_id):
+    day = owned(find_day, day_id)
+    for key, value in load(DAY_FIELDS, partial=True).items():
+        setattr(day, key, value)
+    db.session.commit()
+    return jsonify(day.to_dict(include_stops=True))
+
+
+@bp.delete("/days/<uuid:day_id>")
+def delete_day(day_id):
+    return soft_delete(owned(find_day, day_id))
+
+
+@bp.put("/trips/<uuid:trip_id>/days/order")
+def reorder_days(trip_id):
+    trip = owned(find_trip, trip_id)
+    reorder([d for d in trip.days if d.deleted_at is None], "day of the trip")
+    return jsonify(trip.to_dict(include_days=True))
+
+
+# --- Stops -----------------------------------------------------------------
+
+@bp.post("/days/<uuid:day_id>/stops")
+def create_stop(day_id):
+    day = owned(find_day, day_id)
+    new_id, existing = already_created(Stop, find_stop)
+    if existing:
+        return jsonify(existing.to_dict())
+    data = load(STOP_FIELDS)
+    stop = Stop(id=new_id, day_id=day.id, position=next_position(Stop.position, Stop.day_id, day.id), **data)
+    db.session.add(stop)
+    db.session.commit()
+    return jsonify(stop.to_dict()), 201
+
+
+@bp.patch("/stops/<uuid:stop_id>")
+def update_stop(stop_id):
+    stop = owned(find_stop, stop_id)
+    data = load(STOP_FIELDS, partial=True)
+    body = json_body()
+    if body.get("day_id") is not None:
+        # Moving a stop to another day. The target must be a day this user
+        # owns, in the same trip; otherwise the move would let someone attach
+        # their stop to (and so learn about) another user's day.
+        target = find_day(parse_uuid("day_id", body["day_id"]))
+        if target is None or target.trip_id != stop.day.trip_id:
+            raise ValidationError("day_id must be a day of the same trip")
+        if target.id != stop.day_id:
+            # Position first, while the stop still belongs to its old day.
+            stop.position = next_position(Stop.position, Stop.day_id, target.id)
+            stop.day_id = target.id
+    for key, value in data.items():
+        setattr(stop, key, value)
+    db.session.commit()
+    return jsonify(stop.to_dict())
+
+
+@bp.delete("/stops/<uuid:stop_id>")
+def delete_stop(stop_id):
+    return soft_delete(owned(find_stop, stop_id))
+
+
+@bp.put("/days/<uuid:day_id>/stops/order")
+def reorder_stops(day_id):
+    day = owned(find_day, day_id)
+    reorder([s for s in day.stops if s.deleted_at is None], "stop of the day")
+    return jsonify(day.to_dict(include_stops=True))
