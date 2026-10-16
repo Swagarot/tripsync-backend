@@ -58,7 +58,7 @@ def create_app(overrides=None):
     metrics.init_app(app)
 
     # (importing models registers the tables)
-    from . import auth, extras, health, models, places, routes, travelinfo, trips  # noqa: F401
+    from . import auth, extras, health, models, photos, places, routes, storage, travelinfo, trips  # noqa: F401
     app.register_blueprint(health.bp)
     app.register_blueprint(auth.bp)
     app.register_blueprint(trips.bp)
@@ -66,6 +66,8 @@ def create_app(overrides=None):
     app.register_blueprint(routes.bp)
     app.register_blueprint(extras.bp)
     app.register_blueprint(travelinfo.bp)
+    app.register_blueprint(photos.bp)
+    storage.register_cli(app)  # `flask storage-init`
 
     register_error_handlers(app)
     return app
@@ -85,6 +87,10 @@ def register_error_handlers(app):
         # sign-ups with the same email at the same moment.
         db.session.rollback()
         return jsonify({"error": "conflicts with existing data"}), 409
+
+    @app.errorhandler(413)
+    def too_large(e):
+        return jsonify({"error": "That file is too big (15 MB at most)."}), 413
 
     @app.errorhandler(429)
     def too_many_requests(e):

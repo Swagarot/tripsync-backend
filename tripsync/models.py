@@ -24,6 +24,11 @@ def iso(value):
     return value.isoformat() if value is not None else None
 
 
+def _photo_dict(photo):
+    from .photos import photo_dict  # here, not at the top: photos.py imports this module
+    return photo_dict(photo)
+
+
 class SyncColumns:
     """created_at / updated_at / deleted_at, shared by trips, days and stops."""
 
@@ -150,8 +155,15 @@ class Stop(SyncColumns, db.Model):
     photo_url: Mapped[str | None] = mapped_column(String(1000))
     website: Mapped[str | None] = mapped_column(String(500))
     opening_hours: Mapped[str | None] = mapped_column(String(500))
+    # Your own memories of the place.
+    rating: Mapped[int | None] = mapped_column(Integer)  # 1-5 stars, after visiting
+    visited: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Which of your photos is the stop's picture; none = the famous photo (or
+    # your first photo when there's no famous one).
+    cover_photo_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
 
     day: Mapped[Day] = relationship(back_populates="stops")
+    photos: Mapped[list["StopPhoto"]] = relationship(order_by="StopPhoto.created_at")
 
     def to_dict(self):
         return {
@@ -169,6 +181,12 @@ class Stop(SyncColumns, db.Model):
             "photo_url": self.photo_url,
             "website": self.website,
             "opening_hours": self.opening_hours,
+            "rating": self.rating,
+            "visited": bool(self.visited),
+            "cover_photo_id": str(self.cover_photo_id) if self.cover_photo_id else None,
+            # Signed links to your photos (see photos.py). Imported here to
+            # avoid a circular import (photos.py imports the models).
+            "photos": [_photo_dict(p) for p in self.photos if p.deleted_at is None],
             "updated_at": iso(self.updated_at),
         }
 
@@ -232,3 +250,16 @@ class ChecklistItem(TripChild, db.Model):
 
     def to_dict(self):
         return {**self.base_dict(), "text": self.text, "done": self.done, "position": self.position}
+
+
+class StopPhoto(SyncColumns, db.Model):
+    """One of your photos of a stop. The image itself is in object storage
+    (storage.py) under photos/<id>/full.jpg and thumb.jpg; this row says whose
+    it is and where it belongs."""
+    __tablename__ = "stop_photos"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    stop_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("stops.id", ondelete="CASCADE"), index=True)
+    width: Mapped[int] = mapped_column(Integer)
+    height: Mapped[int] = mapped_column(Integer)
+    size_bytes: Mapped[int] = mapped_column(Integer)

@@ -13,7 +13,8 @@ from .auth import current_user_id
 from .extensions import db
 from .models import Day, Stop, Trip, utcnow
 from .validation import (
-    Choice, Currency, Date, Number, Text, Time, Url, ValidationError, json_body, load, optional_id, parse_uuid,
+    Bool, Choice, Currency, Date, Int, Number, Text, Time, Url, ValidationError, json_body, load, optional_id,
+    parse_uuid,
 )
 
 bp = Blueprint("trips", __name__)
@@ -56,6 +57,8 @@ STOP_FIELDS = {
     "photo_url": Url(1000),
     "website": Url(500),
     "opening_hours": Text(500),
+    "rating": Int(1, 5),
+    "visited": Bool(nullable=False),
 }
 
 
@@ -298,6 +301,14 @@ def update_stop(stop_id):
             # Position first, while the stop still belongs to its old day.
             stop.position = next_position(Stop.position, Stop.day_id, target.id)
             stop.day_id = target.id
+    if "cover_photo_id" in body:
+        # Must be one of this stop's own photos (or null = back to the default).
+        cover = body["cover_photo_id"]
+        if cover is not None:
+            cover = parse_uuid("cover_photo_id", cover)
+            if not any(p.id == cover and p.deleted_at is None for p in stop.photos):
+                raise ValidationError("cover_photo_id must be one of this stop's photos")
+        stop.cover_photo_id = cover
     for key, value in data.items():
         setattr(stop, key, value)
     db.session.commit()

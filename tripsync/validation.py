@@ -103,6 +103,20 @@ class Choice(Field):
         return value
 
 
+class Int(Field):
+    def __init__(self, minimum, maximum, **kwargs):
+        super().__init__(**kwargs)
+        self.minimum = minimum
+        self.maximum = maximum
+
+    def convert(self, key, value):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValidationError(f"{key} must be a whole number")
+        if not self.minimum <= value <= self.maximum:
+            raise ValidationError(f"{key} must be between {self.minimum} and {self.maximum}")
+        return value
+
+
 class Currency(Text):
     """Three letters (ISO 4217), e.g. ILS, JPY, EUR. Stored upper-case."""
 

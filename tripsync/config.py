@@ -36,6 +36,10 @@ class Config:
     # lock the user out of syncing. Trade-off: a stolen token works for 7 days.
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(days=7)
 
+    # Biggest request Flask accepts: a phone photo is 2-8 MB. (ingress-nginx has
+    # its own limit, raised for /api in the chart.)
+    MAX_CONTENT_LENGTH = 15 * 1024 * 1024
+
     # Rate-limit counters live in this process's memory. Fine with one Gunicorn
     # worker and one replica; with more replicas each pod counts separately
     # (then point this at Redis).
