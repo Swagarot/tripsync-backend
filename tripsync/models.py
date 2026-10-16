@@ -105,7 +105,7 @@ class Day(SyncColumns, db.Model):
     date: Mapped[dt.date | None] = mapped_column(Date)
     title: Mapped[str | None] = mapped_column(String(200))
     notes: Mapped[str | None] = mapped_column(Text)
-    # How you get between this day's stops: walk / bike / drive. Used for the
+    # How you get between this day's stops: walk / bike / drive / transit. Used for the
     # route and travel times.
     travel_mode: Mapped[str | None] = mapped_column(String(16))
 

@@ -42,7 +42,7 @@ DAY_FIELDS = {
     "date": Date(),
     "title": Text(200),
     "notes": Text(5000),
-    "travel_mode": Choice(("walk", "bike", "drive")),
+    "travel_mode": Choice(("walk", "bike", "drive", "transit")),
 }
 STOP_FIELDS = {
     "name": Text(200, required=True),

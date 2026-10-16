@@ -1,6 +1,9 @@
-"""Routes and travel times between a day's stops, from OpenRouteService.
+"""Routes and travel times between a day's stops.
 
-POST /routes {"mode": "walk"|"bike"|"drive", "points": [[lat, lng], ...]}
+walk / bike / drive: OpenRouteService (one request for the whole day).
+transit: Transitous (see transit.py), one journey per pair of stops.
+
+POST /routes {"mode": "walk"|"bike"|"drive"|"transit", "points": [[lat, lng], ...], "date"?: "2026-10-17"}
   -> {"geometry": [[lat, lng], ...], "legs": [{"distance_m", "duration_s"}],
       "distance_m", "duration_s"}
 
@@ -12,6 +15,7 @@ The free OpenRouteService key allows about 200 route requests a day, so:
 The API key comes from the k8s Secret `openrouteservice` (env ORS_API_KEY). Without
 it (EKS, local dev) the endpoint answers 503 and the app shows straight lines.
 """
+import datetime as dt
 import os
 import threading
 
@@ -23,7 +27,8 @@ from prometheus_client import Counter
 
 from .extensions import limiter
 from .places import session
-from .validation import Choice, ValidationError, json_body
+from .transit import plan_day
+from .validation import Choice, Date, ValidationError, json_body
 
 bp = Blueprint("routes", __name__)
 
@@ -64,7 +69,14 @@ def fetch_route(mode, points):
         res = session.post(
             ORS_URL.format(profile=PROFILES[mode]),
             # ORS wants [lng, lat]; we use [lat, lng] everywhere else.
-            json={"coordinates": [[lng, lat] for lat, lng in points], "instructions": True},
+            json={
+                "coordinates": [[lng, lat] for lat, lng in points],
+                "instructions": True,
+                # How far from each stop to look for a road or path. The
+                # default, 350 m, fails for big places whose pin sits in the
+                # middle (an airport's is on the airfield, a park's on the grass).
+                "radiuses": [2000] * len(points),
+            },
             headers={"Authorization": key},
             timeout=10,
         )
@@ -102,8 +114,11 @@ def fetch_route(mode, points):
 @limiter.limit("30 per minute")
 def route():
     body = json_body()
-    mode = Choice(tuple(PROFILES), required=True).parse("mode", body.get("mode"))
+    mode = Choice((*PROFILES, "transit"), required=True).parse("mode", body.get("mode"))
     points = parse_points(body.get("points"))
+    if mode == "transit":
+        date = Date().parse("date", body.get("date")) or dt.date.today()
+        return jsonify(plan_day(points, date))
     cache_key = (mode, tuple(points))
     with _lock:
         if cache_key in _cache:
