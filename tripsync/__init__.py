@@ -57,12 +57,15 @@ def create_app(overrides=None):
     limiter.init_app(app)
     metrics.init_app(app)
 
-    from . import auth, health, models, places, routes, trips  # noqa: F401  (models registers the tables)
+    # (importing models registers the tables)
+    from . import auth, extras, health, models, places, routes, travelinfo, trips  # noqa: F401
     app.register_blueprint(health.bp)
     app.register_blueprint(auth.bp)
     app.register_blueprint(trips.bp)
     app.register_blueprint(places.bp)
     app.register_blueprint(routes.bp)
+    app.register_blueprint(extras.bp)
+    app.register_blueprint(travelinfo.bp)
 
     register_error_handlers(app)
     return app

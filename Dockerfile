@@ -20,7 +20,9 @@ COPY . .
 # Run as an unprivileged user instead of root. If someone ever finds a way to
 # run code through the app, they get a user that owns nothing and can't install
 # anything. A fixed numeric UID lets Kubernetes verify it (runAsNonRoot).
-RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin tripsync
+# --create-home: Gunicorn 26's control socket lives in the user's home
+# directory; without one it logs "Permission denied: '/home/tripsync'".
+RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin tripsync
 USER 10001
 
 # Lets `flask db upgrade` (run by the init container, see the Helm chart)

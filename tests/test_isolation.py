@@ -14,7 +14,12 @@ def alices_data(client, alice):
     trip = client.post("/trips", json={"name": "Alice's trip"}, headers=alice).json
     day = client.post(f"/trips/{trip['id']}/days", json={"title": "Alice's day"}, headers=alice).json
     stop = client.post(f"/days/{day['id']}/stops", json={"name": "Alice's stop"}, headers=alice).json
-    return {"trip": trip["id"], "day": day["id"], "stop": stop["id"]}
+    idea = client.post(f"/trips/{trip['id']}/ideas", json={"name": "Alice's idea"}, headers=alice).json
+    expense = client.post(f"/trips/{trip['id']}/expenses", json={
+        "amount": 12.5, "currency": "EUR", "category": "food"}, headers=alice).json
+    item = client.post(f"/trips/{trip['id']}/checklist", json={"text": "Alice's passport"}, headers=alice).json
+    return {"trip": trip["id"], "day": day["id"], "stop": stop["id"],
+            "idea": idea["id"], "expense": expense["id"], "item": item["id"]}
 
 
 ENDPOINTS = [
@@ -29,6 +34,15 @@ ENDPOINTS = [
     ("put", "/days/{day}/stops/order", {"ids": ["{stop}"]}),
     ("patch", "/stops/{stop}", {"name": "hacked"}),
     ("delete", "/stops/{stop}", None),
+    ("post", "/trips/{trip}/ideas", {"name": "hacked"}),
+    ("patch", "/ideas/{idea}", {"name": "hacked"}),
+    ("delete", "/ideas/{idea}", None),
+    ("post", "/trips/{trip}/expenses", {"amount": 1, "currency": "EUR", "category": "food"}),
+    ("patch", "/expenses/{expense}", {"amount": 999}),
+    ("delete", "/expenses/{expense}", None),
+    ("post", "/trips/{trip}/checklist", {"text": "hacked"}),
+    ("patch", "/checklist/{item}", {"done": True}),
+    ("delete", "/checklist/{item}", None),
 ]
 
 
@@ -55,6 +69,9 @@ def test_other_users_rows_are_404(client, alice, bob, alices_data, method, url, 
     assert trip["name"] == "Alice's trip"
     assert [d["title"] for d in trip["days"]] == ["Alice's day"]
     assert [s["name"] for s in trip["days"][0]["stops"]] == ["Alice's stop"]
+    assert [i["name"] for i in trip["ideas"]] == ["Alice's idea"]
+    assert [e["amount"] for e in trip["expenses"]] == [12.5]
+    assert [(c["text"], c["done"]) for c in trip["checklist"]] == [("Alice's passport", False)]
 
 
 def test_trip_list_only_shows_own_trips(client, alice, bob, alices_data):
@@ -71,13 +88,16 @@ def test_cannot_move_own_stop_into_other_users_day(client, bob, alices_data):
     assert res.status_code == 400
 
 
-@pytest.mark.parametrize("kind", ["trip", "day", "stop"])
+@pytest.mark.parametrize("kind", ["trip", "day", "stop", "idea", "expense", "item"])
 def test_cannot_take_over_an_id_by_creating_with_it(client, alice, bob, alices_data, kind):
     # Bob guesses (or sees) one of Alice's IDs and tries to create a row with
     # it. The "retry is harmless" path must not hand him Alice's row.
     trip = client.post("/trips", json={"name": "Bob's trip"}, headers=bob).json
     day = client.post(f"/trips/{trip['id']}/days", json={}, headers=bob).json
-    url = {"trip": "/trips", "day": f"/trips/{trip['id']}/days", "stop": f"/days/{day['id']}/stops"}[kind]
-    res = client.post(url, json={"id": alices_data[kind], "name": "hacked"}, headers=bob)
+    url = {"trip": "/trips", "day": f"/trips/{trip['id']}/days", "stop": f"/days/{day['id']}/stops",
+           "idea": f"/trips/{trip['id']}/ideas", "expense": f"/trips/{trip['id']}/expenses",
+           "item": f"/trips/{trip['id']}/checklist"}[kind]
+    body = {"name": "hacked", "text": "hacked", "amount": 1, "currency": "EUR", "category": "food"}
+    res = client.post(url, json={"id": alices_data[kind], **body}, headers=bob)
     assert res.status_code == 409
     assert "Alice" not in str(res.json)

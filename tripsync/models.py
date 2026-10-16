@@ -1,7 +1,7 @@
 import uuid
 import datetime as dt
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, Text, Time, Uuid
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, Time, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .extensions import db
@@ -62,8 +62,13 @@ class Trip(SyncColumns, db.Model):
     dest_lat: Mapped[float | None] = mapped_column(Float)
     dest_lng: Mapped[float | None] = mapped_column(Float)
     dest_zoom: Mapped[float | None] = mapped_column(Float)  # country ~5, city ~11
+    # Expenses are converted into this currency for the totals (ISO code, ILS...).
+    home_currency: Mapped[str | None] = mapped_column(String(3))
 
     days: Mapped[list["Day"]] = relationship(back_populates="trip", order_by="Day.position")
+    ideas: Mapped[list["SavedPlace"]] = relationship(order_by="SavedPlace.created_at")
+    expenses: Mapped[list["Expense"]] = relationship(order_by="Expense.created_at")
+    checklist: Mapped[list["ChecklistItem"]] = relationship(order_by="ChecklistItem.position")
 
     def to_dict(self, include_days=False):
         data = {
@@ -76,11 +81,17 @@ class Trip(SyncColumns, db.Model):
             "dest_lat": self.dest_lat,
             "dest_lng": self.dest_lng,
             "dest_zoom": self.dest_zoom,
+            "home_currency": self.home_currency,
             "created_at": iso(self.created_at),
             "updated_at": iso(self.updated_at),
         }
         if include_days:
+            # The full trip, as the trip page (and its offline copy) needs it.
+            live = lambda rows: [r.to_dict() for r in rows if r.deleted_at is None]  # noqa: E731
             data["days"] = [d.to_dict(include_stops=True) for d in self.days if d.deleted_at is None]
+            data["ideas"] = live(self.ideas)
+            data["expenses"] = live(self.expenses)
+            data["checklist"] = live(self.checklist)
         return data
 
 
@@ -160,3 +171,64 @@ class Stop(SyncColumns, db.Model):
             "opening_hours": self.opening_hours,
             "updated_at": iso(self.updated_at),
         }
+
+
+# --- Things that hang directly off a trip (the side panel's tabs) ---------------
+# Same rules as days and stops: client-chosen UUIDs, updated_at, soft delete,
+# and ownership through the trip (see extras.py).
+
+class TripChild(SyncColumns):
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    trip_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("trips.id", ondelete="CASCADE"), index=True)
+
+    def base_dict(self):
+        return {"id": str(self.id), "trip_id": str(self.trip_id), "updated_at": iso(self.updated_at)}
+
+
+class SavedPlace(TripChild, db.Model):
+    """'Ideas': places you might visit, not on any day yet."""
+    __tablename__ = "saved_places"
+
+    name: Mapped[str] = mapped_column(String(200))
+    lat: Mapped[float | None] = mapped_column(Float)
+    lng: Mapped[float | None] = mapped_column(Float)
+    address: Mapped[str | None] = mapped_column(String(500))
+    notes: Mapped[str | None] = mapped_column(Text)
+    osm_ref: Mapped[str | None] = mapped_column(String(32))
+    category: Mapped[str | None] = mapped_column(String(64))
+    photo_url: Mapped[str | None] = mapped_column(String(1000))
+    website: Mapped[str | None] = mapped_column(String(500))
+    opening_hours: Mapped[str | None] = mapped_column(String(500))
+
+    def to_dict(self):
+        return {**self.base_dict(), **{k: getattr(self, k) for k in (
+            "name", "lat", "lng", "address", "notes", "osm_ref", "category", "photo_url", "website", "opening_hours",
+        )}}
+
+
+class Expense(TripChild, db.Model):
+    __tablename__ = "expenses"
+
+    # Numeric, not Float: money must add up exactly (0.1 + 0.2 != 0.3 in floats).
+    amount: Mapped[float] = mapped_column(Numeric(12, 2))
+    currency: Mapped[str] = mapped_column(String(3))  # what was actually paid in
+    category: Mapped[str] = mapped_column(String(16))
+    note: Mapped[str | None] = mapped_column(String(300))
+    date: Mapped[dt.date | None] = mapped_column(Date)
+
+    def to_dict(self):
+        return {
+            **self.base_dict(), "amount": float(self.amount), "currency": self.currency,
+            "category": self.category, "note": self.note, "date": iso(self.date),
+        }
+
+
+class ChecklistItem(TripChild, db.Model):
+    __tablename__ = "checklist_items"
+
+    text: Mapped[str] = mapped_column(String(300))
+    done: Mapped[bool] = mapped_column(Boolean, default=False)
+    position: Mapped[int] = mapped_column(Integer)
+
+    def to_dict(self):
+        return {**self.base_dict(), "text": self.text, "done": self.done, "position": self.position}

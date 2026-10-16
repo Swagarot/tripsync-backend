@@ -103,6 +103,26 @@ class Choice(Field):
         return value
 
 
+class Currency(Text):
+    """Three letters (ISO 4217), e.g. ILS, JPY, EUR. Stored upper-case."""
+
+    def __init__(self, **kwargs):
+        super().__init__(3, **kwargs)
+
+    def convert(self, key, value):
+        value = super().convert(key, value)
+        if value is not None and not (len(value) == 3 and value.isalpha()):
+            raise ValidationError(f"{key} must be a currency code like ILS or EUR")
+        return value.upper() if value else value
+
+
+class Bool(Field):
+    def convert(self, key, value):
+        if not isinstance(value, bool):
+            raise ValidationError(f"{key} must be true or false")
+        return value
+
+
 def json_body():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):

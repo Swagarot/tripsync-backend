@@ -13,7 +13,7 @@ from .auth import current_user_id
 from .extensions import db
 from .models import Day, Stop, Trip, utcnow
 from .validation import (
-    Choice, Date, Number, Text, Time, Url, ValidationError, json_body, load, optional_id, parse_uuid,
+    Choice, Currency, Date, Number, Text, Time, Url, ValidationError, json_body, load, optional_id, parse_uuid,
 )
 
 bp = Blueprint("trips", __name__)
@@ -36,6 +36,7 @@ TRIP_FIELDS = {
     "dest_lat": Number(-90, 90),
     "dest_lng": Number(-180, 180),
     "dest_zoom": Number(1, 18),
+    "home_currency": Currency(),
 }
 DAY_FIELDS = {
     "date": Date(),
@@ -152,14 +153,44 @@ def soft_delete(row):
 
 # --- Trips -----------------------------------------------------------------
 
+def trip_previews(trip_ids):
+    """For the trips page cards: counts, the pins for a mini map, and a
+    cover photo (the first stop that has one). Two queries for all trips
+    together, instead of loading every trip in full."""
+    previews = {tid: {"days": 0, "places": 0, "points": [], "photo_url": None} for tid in trip_ids}
+    if not trip_ids:
+        return previews
+    day_counts = db.session.execute(
+        select(Day.trip_id, func.count())
+        .where(Day.trip_id.in_(trip_ids), Day.deleted_at.is_(None))
+        .group_by(Day.trip_id)
+    )
+    for trip_id, count in day_counts:
+        previews[trip_id]["days"] = count
+    stops = db.session.execute(
+        select(Day.trip_id, Stop.lat, Stop.lng, Stop.photo_url)
+        .join(Stop.day)
+        .where(Day.trip_id.in_(trip_ids), Day.deleted_at.is_(None), Stop.deleted_at.is_(None))
+        .order_by(Day.trip_id, Day.position, Stop.position)
+    )
+    for trip_id, lat, lng, photo in stops:
+        p = previews[trip_id]
+        p["places"] += 1
+        if lat is not None and len(p["points"]) < 50:  # enough for a thumbnail map
+            p["points"].append([round(lat, 4), round(lng, 4)])
+        p["photo_url"] = p["photo_url"] or photo
+    return previews
+
+
 @bp.get("/trips")
 def list_trips():
-    trips = db.session.scalars(
+    trips = list(db.session.scalars(
         select(Trip)
         .where(Trip.user_id == current_user_id(), Trip.deleted_at.is_(None))
         .order_by(Trip.created_at.desc())
-    )
-    return jsonify([t.to_dict() for t in trips])
+    ))
+    previews = trip_previews([t.id for t in trips])
+    return jsonify([{**t.to_dict(), "preview": previews[t.id]} for t in trips])
 
 
 @bp.post("/trips")
