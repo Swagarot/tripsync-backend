@@ -8,3 +8,5 @@ Flask-JWT-Extended==4.7.4
 Flask-Limiter==4.1.1
 prometheus-flask-exporter==0.23.2
 gunicorn==26.2.0
+requests==2.34.2
+cachetools==7.2.2

@@ -81,6 +81,28 @@ class Number(Field):
         return float(value)
 
 
+class Url(Text):
+    """An http(s) link. Anything else (javascript:, data:...) is refused,
+    because the page puts these into links and images."""
+
+    def convert(self, key, value):
+        value = super().convert(key, value)
+        if value is not None and not value.startswith(("https://", "http://")):
+            raise ValidationError(f"{key} must be an http(s) URL")
+        return value
+
+
+class Choice(Field):
+    def __init__(self, choices, **kwargs):
+        super().__init__(**kwargs)
+        self.choices = choices
+
+    def convert(self, key, value):
+        if value not in self.choices:
+            raise ValidationError(f"{key} must be one of: {', '.join(self.choices)}")
+        return value
+
+
 def json_body():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):

@@ -12,7 +12,9 @@ from sqlalchemy import func, select
 from .auth import current_user_id
 from .extensions import db
 from .models import Day, Stop, Trip, utcnow
-from .validation import Date, Number, Text, Time, ValidationError, json_body, load, optional_id, parse_uuid
+from .validation import (
+    Choice, Date, Number, Text, Time, Url, ValidationError, json_body, load, optional_id, parse_uuid,
+)
 
 bp = Blueprint("trips", __name__)
 
@@ -35,6 +37,7 @@ DAY_FIELDS = {
     "date": Date(),
     "title": Text(200),
     "notes": Text(5000),
+    "travel_mode": Choice(("walk", "bike", "drive")),
 }
 STOP_FIELDS = {
     "name": Text(200, required=True),
@@ -43,6 +46,11 @@ STOP_FIELDS = {
     "address": Text(500),
     "time": Time(),
     "notes": Text(5000),
+    "osm_ref": Text(32),
+    "category": Text(64),
+    "photo_url": Url(1000),
+    "website": Url(500),
+    "opening_hours": Text(500),
 }
 
 

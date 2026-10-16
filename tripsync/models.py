@@ -84,6 +84,9 @@ class Day(SyncColumns, db.Model):
     date: Mapped[dt.date | None] = mapped_column(Date)
     title: Mapped[str | None] = mapped_column(String(200))
     notes: Mapped[str | None] = mapped_column(Text)
+    # How you get between this day's stops: walk / bike / drive. Used for the
+    # route and travel times.
+    travel_mode: Mapped[str | None] = mapped_column(String(16))
 
     trip: Mapped[Trip] = relationship(back_populates="days")
     stops: Mapped[list["Stop"]] = relationship(back_populates="day", order_by="Stop.position")
@@ -96,6 +99,7 @@ class Day(SyncColumns, db.Model):
             "date": iso(self.date),
             "title": self.title,
             "notes": self.notes,
+            "travel_mode": self.travel_mode,
             "updated_at": iso(self.updated_at),
         }
         if include_stops:
@@ -117,6 +121,14 @@ class Stop(SyncColumns, db.Model):
     # Planned arrival time on that day, local time, no timezone.
     time: Mapped[dt.time | None] = mapped_column(Time)
     notes: Mapped[str | None] = mapped_column(Text)
+    # Filled when the stop was added from place search (places.py). A copy is
+    # kept on the stop, so the photo/hours/website still show offline, and the
+    # trip doesn't change if OpenStreetMap does.
+    osm_ref: Mapped[str | None] = mapped_column(String(32))  # e.g. W24341353
+    category: Mapped[str | None] = mapped_column(String(64))
+    photo_url: Mapped[str | None] = mapped_column(String(1000))
+    website: Mapped[str | None] = mapped_column(String(500))
+    opening_hours: Mapped[str | None] = mapped_column(String(500))
 
     day: Mapped[Day] = relationship(back_populates="stops")
 
@@ -131,5 +143,10 @@ class Stop(SyncColumns, db.Model):
             "address": self.address,
             "time": self.time.strftime("%H:%M") if self.time else None,
             "notes": self.notes,
+            "osm_ref": self.osm_ref,
+            "category": self.category,
+            "photo_url": self.photo_url,
+            "website": self.website,
+            "opening_hours": self.opening_hours,
             "updated_at": iso(self.updated_at),
         }
