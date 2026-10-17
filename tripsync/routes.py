@@ -61,25 +61,68 @@ def parse_points(value):
     return points
 
 
+def simplify(line, tolerance=0.00005):
+    """Drop points that don't change the line's shape (Douglas-Peucker).
+
+    A long route comes back with tens of thousands of points (Tokyo to
+    Kumamoto on foot: 35,000, ~700 kB), most of them on straight stretches.
+    Keeping only points that bend the line by more than ~5 m (0.00005 degrees)
+    looks the same on the map at any zoom and is a fraction of the size, for
+    the browser, its offline cache and our own 2000-entry cache.
+    Returns the indexes of the points kept (first and last always are).
+    """
+    keep = {0, len(line) - 1}
+    stack = [(0, len(line) - 1)]
+    while stack:
+        a, b = stack.pop()
+        (ay, ax), (by, bx) = line[a], line[b]
+        dx, dy = bx - ax, by - ay
+        length = (dx * dx + dy * dy) ** 0.5
+        far, far_d = None, tolerance
+        for i in range(a + 1, b):
+            py, px = line[i]
+            # Distance from the point to the straight line a-b.
+            d = abs(dy * (px - ax) - dx * (py - ay)) / length if length else ((px - ax) ** 2 + (py - ay) ** 2) ** 0.5
+            if d > far_d:
+                far, far_d = i, d
+        if far is not None:
+            keep.add(far)
+            stack += [(a, far), (far, b)]
+    return sorted(keep)
+
+
+def call_ors(mode, points, key, avoid_ferries):
+    body = {
+        # ORS wants [lng, lat]; we use [lat, lng] everywhere else.
+        "coordinates": [[lng, lat] for lat, lng in points],
+        # How far from each stop to look for a road or path. The default,
+        # 350 m, fails for big places whose pin sits in the middle (an
+        # airport's is on the airfield, a park's on the grass).
+        "radiuses": [2000] * len(points),
+    }
+    if avoid_ferries:
+        body["options"] = {"avoid_features": ["ferries"]}
+    return session.post(
+        ORS_URL.format(profile=PROFILES[mode]),
+        json=body,
+        headers={"Authorization": key},
+        timeout=20,
+    )
+
+
 def fetch_route(mode, points):
     key = os.environ.get("ORS_API_KEY")
     if not key:
         abort(503, "Routing isn't set up on this server.")
     try:
-        res = session.post(
-            ORS_URL.format(profile=PROFILES[mode]),
-            # ORS wants [lng, lat]; we use [lat, lng] everywhere else.
-            json={
-                "coordinates": [[lng, lat] for lat, lng in points],
-                "instructions": True,
-                # How far from each stop to look for a road or path. The
-                # default, 350 m, fails for big places whose pin sits in the
-                # middle (an airport's is on the airfield, a park's on the grass).
-                "radiuses": [2000] * len(points),
-            },
-            headers={"Authorization": key},
-            timeout=10,
-        )
+        # Ferries first avoided: in OpenStreetMap a ferry line is often one
+        # straight segment, and on long trips ORS happily picks one (by bike
+        # from Tokyo to Kumamoto it took the overnight ferry, drawn as a
+        # straight line across the sea). Only when there's no other way (an
+        # island) ask again with ferries allowed; that costs a second request.
+        res = call_ors(mode, points, key, avoid_ferries=True)
+        if res.status_code == 404:
+            res = call_ors(mode, points, key, avoid_ferries=False)
     except requests.RequestException:
         ROUTE_CALLS.labels("error").inc()
         abort(502, "The routing service can't be reached right now.")
@@ -97,14 +140,16 @@ def fetch_route(mode, points):
 
     feature = res.json()["features"][0]
     props = feature["properties"]
-    geometry = [[round(lat, 5), round(lng, 5)] for lng, lat, *_ in feature["geometry"]["coordinates"]]
+    full = [[round(lat, 5), round(lng, 5)] for lng, lat, *_ in feature["geometry"]["coordinates"]]
+    geometry = [full[i] for i in simplify(full)] if len(full) > 2 else full
     return {
         "geometry": geometry,
         # Where each stop joined the road network (way_points = indexes into
-        # the geometry). With the 2 km search radius this can be far from the
-        # stop's pin; the map draws a dotted line between the two.
-        "snapped": [geometry[i] for i in props.get("way_points", []) if i < len(geometry)],
-        # One leg per pair of consecutive stops (turn-by-turn steps dropped).
+        # the full geometry, so read before simplifying). With the 2 km search
+        # radius this can be far from the stop's pin; the map draws a dotted
+        # line between the two.
+        "snapped": [full[i] for i in props.get("way_points", []) if i < len(full)],
+        # One leg per pair of consecutive stops.
         "legs": [
             {"distance_m": round(s.get("distance", 0)), "duration_s": round(s.get("duration", 0))}
             for s in props.get("segments", [])
