@@ -182,3 +182,68 @@ def test_details_bad_ref_is_404_without_upstream_call(client, alice, upstream):
 ])
 def test_name_similarity(a, b, match):
     assert (places.name_similarity(a, b) >= 0.75) is match
+
+
+# --- Photo fetching for the keepsake ---------------------------------------------
+
+class FakeStream:
+    def __init__(self, status, headers=None, body=b""):
+        self.status_code, self.headers = status, headers or {}
+        self.is_redirect = status in (301, 302)
+        self.raw = type("Raw", (), {"read": lambda _self, n, decode_content=True: body[:n]})()
+
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def wikimedia(monkeypatch):
+    calls = []
+    hops = {}
+
+    def fake_get(url, **kwargs):
+        calls.append(url)
+        return hops[url]
+
+    monkeypatch.setattr(places.session, "get", fake_get)
+    return hops, calls
+
+
+def test_photo_follows_wikimedia_redirects(client, alice, wikimedia):
+    hops, calls = wikimedia
+    start = places.PHOTO_PREFIX + "Tokyo%20Skytree.jpg?width=640"
+    hops[start] = FakeStream(302, {"Location": "/w/index.php?title=Special:Redirect/file/x.jpg"})
+    hops["https://commons.wikimedia.org/w/index.php?title=Special:Redirect/file/x.jpg"] = FakeStream(
+        301, {"Location": "https://thumb.wikimedia.org/x.jpg"})
+    hops["https://thumb.wikimedia.org/x.jpg"] = FakeStream(200, {"Content-Type": "image/jpeg"}, b"JPEGDATA")
+    res = client.get("/places/photo", query_string={"url": start}, headers=alice)
+    assert res.status_code == 200
+    assert res.data == b"JPEGDATA" and res.mimetype == "image/jpeg"
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize("url", [
+    "https://evil.example.com/x.jpg",
+    "http://169.254.169.254/latest/meta-data/",  # the classic SSRF target
+    "https://commons.wikimedia.org/wiki/Main_Page",
+])
+def test_photo_refuses_anything_else(client, alice, wikimedia, url):
+    hops, calls = wikimedia
+    assert client.get("/places/photo", query_string={"url": url}, headers=alice).status_code == 400
+    assert calls == []
+
+
+def test_photo_wont_follow_a_redirect_off_wikimedia(client, alice, wikimedia):
+    hops, calls = wikimedia
+    start = places.PHOTO_PREFIX + "x.jpg"
+    hops[start] = FakeStream(302, {"Location": "http://10.0.0.1/admin"})
+    assert client.get("/places/photo", query_string={"url": start}, headers=alice).status_code == 502
+    assert calls == [start]
+
+
+def test_photo_must_be_an_image_and_needs_login(client, alice, wikimedia):
+    hops, _ = wikimedia
+    start = places.PHOTO_PREFIX + "x.jpg"
+    hops[start] = FakeStream(200, {"Content-Type": "text/html"}, b"<html>")
+    assert client.get("/places/photo", query_string={"url": start}, headers=alice).status_code == 502
+    assert client.get("/places/photo", query_string={"url": start}).status_code == 401

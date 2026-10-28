@@ -22,11 +22,11 @@ import re
 import threading
 import time
 import unicodedata
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlsplit
 
 import requests
 from cachetools import TTLCache
-from flask import Blueprint, abort, jsonify, request
+from flask import Blueprint, Response, abort, jsonify, request
 from flask_jwt_extended import jwt_required
 from prometheus_client import Counter
 
@@ -368,3 +368,51 @@ def details(osm_ref):
     if result is None:
         abort(404)
     return jsonify(result)
+
+
+# --- Famous-place photos for the keepsake file -----------------------------------
+# The keepsake (frontend keepsake.js) embeds every photo into one HTML file, so
+# the browser must read the image bytes. Wikimedia's Special:FilePath links
+# (what load_details() stores) redirect twice before the image, and the
+# redirects carry no CORS header, so the browser isn't allowed to read them.
+# This fetches them for it. It is NOT a general proxy (that would let anyone
+# make our server request arbitrary URLs, "SSRF"): only links of the exact
+# form we generate, redirects only within *.wikimedia.org over HTTPS, images
+# only, at most 5 MB.
+PHOTO_PREFIX = "https://commons.wikimedia.org/wiki/Special:FilePath/"
+MAX_PHOTO_BYTES = 5 * 1024 * 1024
+
+
+def wikimedia_url(url):
+    parts = urlsplit(url)
+    return parts.scheme == "https" and (parts.hostname or "").endswith(".wikimedia.org")
+
+
+@bp.get("/photo")
+@jwt_required()
+@limiter.limit("120 per minute")
+def photo():
+    url = request.args.get("url", "")
+    if not url.startswith(PHOTO_PREFIX):
+        abort(400, "Only Wikimedia Commons photo links are supported.")
+    try:
+        for _ in range(5):  # follow at most a few redirects, checking each
+            res = session.get(url, timeout=TIMEOUT, allow_redirects=False, stream=True)
+            if not res.is_redirect:
+                break
+            url = urljoin(url, res.headers.get("Location", ""))
+            res.close()
+            if not wikimedia_url(url):
+                abort(502, "The photo moved somewhere unexpected.")
+        else:
+            abort(502, "Too many redirects.")
+        if res.status_code != 200 or not res.headers.get("Content-Type", "").startswith("image/"):
+            abort(502, "That photo isn't available.")
+        data = res.raw.read(MAX_PHOTO_BYTES + 1, decode_content=True)
+    except requests.RequestException:
+        abort(502, "Wikimedia can't be reached right now.")
+    if len(data) > MAX_PHOTO_BYTES:
+        abort(502, "That photo is too big.")
+    out = Response(data, mimetype=res.headers["Content-Type"])
+    out.headers["Cache-Control"] = "private, max-age=86400"
+    return out
