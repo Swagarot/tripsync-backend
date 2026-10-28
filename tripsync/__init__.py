@@ -58,7 +58,9 @@ def create_app(overrides=None):
     metrics.init_app(app)
 
     # (importing models registers the tables)
-    from . import auth, extras, health, models, photos, places, routes, storage, travelinfo, trips  # noqa: F401
+    from . import (  # noqa: F401
+        auth, extras, health, models, photos, places, routes, sharing, storage, travelinfo, trips,
+    )
     app.register_blueprint(health.bp)
     app.register_blueprint(auth.bp)
     app.register_blueprint(trips.bp)
@@ -67,6 +69,7 @@ def create_app(overrides=None):
     app.register_blueprint(extras.bp)
     app.register_blueprint(travelinfo.bp)
     app.register_blueprint(photos.bp)
+    app.register_blueprint(sharing.bp)
     storage.register_cli(app)  # `flask storage-init`
 
     register_error_handlers(app)

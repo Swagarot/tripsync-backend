@@ -8,20 +8,23 @@ serves them, with the kind in the URL:
   DELETE /<kind>/<id>                soft delete
 
 kind = ideas | expenses | checklist | lodgings. They come back inside GET /trips/<id>.
-Same security rule as trips.py: rows are only found through the logged-in
-user's own trips, so anyone else's id is a 404.
+Same security rule as trips.py: rows are only found through trips the
+logged-in user is on (404 otherwise), and changing them needs the editor role.
+
+Expenses also say who paid (paid_by) and who shares the cost (split_between),
+both people on the trip; the balances are worked out by the frontend.
 """
 from decimal import Decimal
 
-from flask import Blueprint, abort, jsonify
+from flask import Blueprint, jsonify
 from flask_jwt_extended import jwt_required
 from sqlalchemy import func, select
 
+from .access import member_ids, trip_of, visible_trips
 from .extensions import db
 from .models import ChecklistItem, Expense, Lodging, SavedPlace, Trip, utcnow
 from .trips import already_created, find_trip, owned
-from .auth import current_user_id
-from .validation import Bool, Choice, Currency, Date, Number, Text, Url, ValidationError, load
+from .validation import Bool, Choice, Currency, Date, Number, Text, Url, ValidationError, json_body, load, parse_uuid
 
 bp = Blueprint("extras", __name__)
 
@@ -80,7 +83,7 @@ def find_child(model, row_id):
         select(model).join(Trip, Trip.id == model.trip_id).where(
             model.id == row_id,
             model.deleted_at.is_(None),
-            Trip.user_id == current_user_id(),
+            visible_trips(),
             Trip.deleted_at.is_(None),
         )
     )
@@ -89,6 +92,38 @@ def find_child(model, row_id):
 def check_stay(data):
     if data.get("check_in") and data.get("check_out") and data["check_out"] < data["check_in"]:
         raise ValidationError("check_out must not be before check_in")
+
+
+def read_split(trip):
+    """paid_by / split_between from the body, checked against the trip's
+    people (someone not on the trip can't pay or owe). Only the keys that were
+    sent, so an update that leaves them out keeps the old values."""
+    body = json_body()
+    out = {}
+    people = None
+    if "paid_by" in body:
+        people = member_ids(trip)
+        if body["paid_by"] is None:
+            out["paid_by"] = None
+        else:
+            payer = parse_uuid("paid_by", body["paid_by"])
+            if payer not in people:
+                raise ValidationError("paid_by must be someone on this trip")
+            out["paid_by"] = payer
+    if "split_between" in body:
+        people = people or member_ids(trip)
+        value = body["split_between"]
+        if value is None:
+            out["split_between"] = None  # everyone on the trip
+        else:
+            if not isinstance(value, list) or not value:
+                raise ValidationError("split_between must be a non-empty list of people (or null for everyone)")
+            ids = [parse_uuid("split_between", v) for v in value]
+            if any(i not in people for i in ids):
+                raise ValidationError("split_between must only list people on this trip")
+            # Stored as strings, sorted, no duplicates: JSON has no UUID type.
+            out["split_between"] = sorted({str(i) for i in ids})
+    return out
 
 
 def prepare(data):
@@ -107,6 +142,8 @@ def create(trip_id, kind):
         return jsonify(existing.to_dict())
     data = prepare(load(fields))
     check_stay(data)
+    if model is Expense:
+        data.update(read_split(trip))
     if model is ChecklistItem:
         highest = db.session.scalar(
             select(func.max(ChecklistItem.position)).where(
@@ -124,12 +161,14 @@ def create(trip_id, kind):
 @bp.patch(f"/{KIND_PATTERN}/<uuid:row_id>")
 def update(kind, row_id):
     model, fields = KINDS[kind]
-    row = find_child(model, row_id) or abort(404)
+    row = owned(lambda i: find_child(model, i), row_id)
     data = prepare(load(fields, partial=True))
+    if model is Expense:
+        data.update(read_split(trip_of(row)))
     if model is Lodging:
         check_stay({"check_in": data.get("check_in", row.check_in), "check_out": data.get("check_out", row.check_out)})
     for key, value in data.items():
-        if value is None and fields[key].required:
+        if key in fields and value is None and fields[key].required:
             raise ValidationError(f"{key} is required")
         setattr(row, key, value)
     db.session.commit()
@@ -139,7 +178,7 @@ def update(kind, row_id):
 @bp.delete(f"/{KIND_PATTERN}/<uuid:row_id>")
 def delete(kind, row_id):
     model, _ = KINDS[kind]
-    row = find_child(model, row_id) or abort(404)
+    row = owned(lambda i: find_child(model, i), row_id)
     row.deleted_at = utcnow()
     db.session.commit()
     return "", 204

@@ -1,18 +1,21 @@
 """Trips, days and stops: create, read, update, delete, reorder.
 
 Security rule for this whole file: a row is only ever loaded through one of the
-owned_*() helpers, which filter on the logged-in user. Someone asking for
-another user's trip gets 404, exactly as if it didn't exist, so IDs that belong
-to someone else can't even be confirmed.
+find_*() helpers, which only see trips the logged-in user owns or is a member
+of, and then owned() checks the user's role is enough for the action (see
+access.py). Someone asking for a trip they're not on gets 404, exactly as if it
+didn't exist, so IDs that belong to someone else can't even be confirmed. A
+viewer trying to change something gets 403.
 """
 from flask import Blueprint, abort, jsonify
 from flask_jwt_extended import jwt_required
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
+from .access import EDITOR, OWNER, VIEWER, members_of, require, role_in, trip_of, visible_trips
 from .auth import current_user_id
 from .extensions import db
-from .models import Day, Stop, Trip, utcnow
+from .models import Day, Stop, Trip, TripMember, User, utcnow
 from .validation import (
     Bool, Choice, Currency, Date, Int, Number, Text, Time, Url, ValidationError, json_body, load, optional_id,
     parse_uuid,
@@ -84,7 +87,7 @@ def find_full_trip(trip_id):
     return db.session.scalar(
         select(Trip).options(*FULL_TRIP).where(
             Trip.id == trip_id,
-            Trip.user_id == current_user_id(),
+            visible_trips(),
             Trip.deleted_at.is_(None),
         )
     )
@@ -94,19 +97,19 @@ def find_trip(trip_id):
     return db.session.scalar(
         select(Trip).where(
             Trip.id == trip_id,
-            Trip.user_id == current_user_id(),
+            visible_trips(),
             Trip.deleted_at.is_(None),
         )
     )
 
 
 def find_day(day_id):
-    # A day has no user_id of its own; ownership comes from its trip.
+    # A day has no owner of its own; access comes from its trip.
     return db.session.scalar(
         select(Day).join(Day.trip).where(
             Day.id == day_id,
             Day.deleted_at.is_(None),
-            Trip.user_id == current_user_id(),
+            visible_trips(),
             Trip.deleted_at.is_(None),
         )
     )
@@ -118,16 +121,20 @@ def find_stop(stop_id):
             Stop.id == stop_id,
             Stop.deleted_at.is_(None),
             Day.deleted_at.is_(None),
-            Trip.user_id == current_user_id(),
+            visible_trips(),
             Trip.deleted_at.is_(None),
         )
     )
 
 
-def owned(find, row_id):
+def owned(find, row_id, need=EDITOR):
+    """Load a row the user may act on: 404 if they can't see it, 403 if
+    their role on its trip is lower than `need`. Changing things is the
+    common case, so `need` defaults to editor; reads pass VIEWER."""
     row = find(row_id)
     if row is None:
         abort(404)
+    require(trip_of(row), need)
     return row
 
 
@@ -215,49 +222,70 @@ def trip_previews(trip_ids):
 def list_trips():
     trips = list(db.session.scalars(
         select(Trip)
-        .where(Trip.user_id == current_user_id(), Trip.deleted_at.is_(None))
+        .where(visible_trips(), Trip.deleted_at.is_(None))
         .order_by(Trip.created_at.desc())
     ))
     previews = trip_previews([t.id for t in trips])
-    return jsonify([{**t.to_dict(), "preview": previews[t.id]} for t in trips])
+    # Your role on each, and whose it is, in two queries for the whole list.
+    me = current_user_id()
+    roles = dict(db.session.execute(
+        select(TripMember.trip_id, TripMember.role).where(TripMember.user_id == me)
+    ).all())
+    owner_ids = {t.user_id for t in trips if t.user_id != me}
+    emails = dict(db.session.execute(select(User.id, User.email).where(User.id.in_(owner_ids))).all())
+    return jsonify([{
+        **t.to_dict(),
+        "preview": previews[t.id],
+        "role": OWNER if t.user_id == me else roles.get(t.id),
+        "owner_email": None if t.user_id == me else emails.get(t.user_id),
+    } for t in trips])
 
 
 @bp.post("/trips")
 def create_trip():
     new_id, existing = already_created(Trip, find_trip)
     if existing:
-        return jsonify(existing.to_dict(include_days=True))
+        return jsonify(full_trip_dict(existing))
     data = load(TRIP_FIELDS)
     check_dates(data.get("start_date"), data.get("end_date"))
     trip = Trip(id=new_id, user_id=current_user_id(), **data)
     db.session.add(trip)
     db.session.commit()
-    return jsonify(trip.to_dict(include_days=True)), 201
+    return jsonify(full_trip_dict(trip)), 201
 
 
 @bp.get("/trips/<uuid:trip_id>")
 def get_trip(trip_id):
     # The whole trip in one response (days with their stops), which is what
-    # the trip page and, later, the offline cache need.
-    return jsonify(owned(find_full_trip, trip_id).to_dict(include_days=True))
+    # the trip page and, later, the offline cache need. Plus your role (the
+    # page hides editing for viewers) and who's on it (sharing, splitting).
+    trip = find_full_trip(trip_id) or abort(404)
+    role = require(trip, VIEWER)
+    return jsonify(full_trip_dict(trip, role))
+
+
+def full_trip_dict(trip, role=None):
+    return {**trip.to_dict(include_days=True), "role": role or role_in(trip), "members": members_of(trip)}
 
 
 @bp.patch("/trips/<uuid:trip_id>")
 def update_trip(trip_id):
     trip = owned(find_trip, trip_id)
     data = load(TRIP_FIELDS, partial=True)
+    if "name" in data and data["name"] != trip.name:
+        require(trip, OWNER)  # editors change everything else
     check_dates(data.get("start_date", trip.start_date), data.get("end_date", trip.end_date))
     for key, value in data.items():
         setattr(trip, key, value)
     db.session.commit()
-    return jsonify(trip.to_dict(include_days=True))
+    return jsonify(full_trip_dict(trip))
 
 
 @bp.delete("/trips/<uuid:trip_id>")
 def delete_trip(trip_id):
     # Its days and stops stay as they are: every lookup goes through the trip,
-    # so they become unreachable together with it.
-    return soft_delete(owned(find_trip, trip_id))
+    # so they become unreachable together with it (for every member too).
+    return soft_delete(owned(find_trip, trip_id, need=OWNER))
 
 
 # --- Days ------------------------------------------------------------------
@@ -293,7 +321,7 @@ def delete_day(day_id):
 def reorder_days(trip_id):
     trip = owned(find_trip, trip_id)
     reorder([d for d in trip.days if d.deleted_at is None], "day of the trip")
-    return jsonify(trip.to_dict(include_days=True))
+    return jsonify(full_trip_dict(trip))
 
 
 # --- Stops -----------------------------------------------------------------
@@ -317,9 +345,9 @@ def update_stop(stop_id):
     data = load(STOP_FIELDS, partial=True)
     body = json_body()
     if body.get("day_id") is not None:
-        # Moving a stop to another day. The target must be a day this user
-        # owns, in the same trip; otherwise the move would let someone attach
-        # their stop to (and so learn about) another user's day.
+        # Moving a stop to another day. The target must be a day of the same
+        # trip; otherwise the move would let someone attach their stop to (and
+        # so learn about) another trip's day.
         target = find_day(parse_uuid("day_id", body["day_id"]))
         if target is None or target.trip_id != stop.day.trip_id:
             raise ValidationError("day_id must be a day of the same trip")

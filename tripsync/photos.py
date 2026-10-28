@@ -30,11 +30,11 @@ from flask_jwt_extended import jwt_required
 from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy import select
 
-from .auth import current_user_id
+from .access import visible_trips
 from .extensions import db, limiter
 from .models import Day, Stop, StopPhoto, Trip, utcnow
 from .storage import StorageUnavailable, get_storage
-from .trips import find_stop
+from .trips import find_stop, owned
 
 bp = Blueprint("photos", __name__)
 
@@ -94,7 +94,7 @@ def _encode(img, side, quality):
 @jwt_required()
 @limiter.limit("60 per minute")
 def upload(stop_id):
-    stop = find_stop(stop_id) or abort(404)
+    stop = owned(find_stop, stop_id)  # adding photos = editing the trip
     try:
         storage = get_storage(current_app)
     except StorageUnavailable as e:
@@ -135,7 +135,7 @@ def find_photo(photo_id):
             StopPhoto.deleted_at.is_(None),
             Stop.deleted_at.is_(None),
             Day.deleted_at.is_(None),
-            Trip.user_id == current_user_id(),
+            visible_trips(),
             Trip.deleted_at.is_(None),
         )
     )
@@ -144,7 +144,7 @@ def find_photo(photo_id):
 @bp.delete("/photos/<uuid:photo_id>")
 @jwt_required()
 def delete(photo_id):
-    photo = find_photo(photo_id) or abort(404)
+    photo = owned(find_photo, photo_id)
     photo.deleted_at = utcnow()
     stop = db.session.get(Stop, photo.stop_id)
     if stop.cover_photo_id == photo.id:

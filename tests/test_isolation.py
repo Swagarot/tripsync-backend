@@ -9,20 +9,6 @@ doesn't exist.
 import pytest
 
 
-@pytest.fixture
-def alices_data(client, alice):
-    trip = client.post("/trips", json={"name": "Alice's trip"}, headers=alice).json
-    day = client.post(f"/trips/{trip['id']}/days", json={"title": "Alice's day"}, headers=alice).json
-    stop = client.post(f"/days/{day['id']}/stops", json={"name": "Alice's stop"}, headers=alice).json
-    idea = client.post(f"/trips/{trip['id']}/ideas", json={"name": "Alice's idea"}, headers=alice).json
-    expense = client.post(f"/trips/{trip['id']}/expenses", json={
-        "amount": 12.5, "currency": "EUR", "category": "food"}, headers=alice).json
-    item = client.post(f"/trips/{trip['id']}/checklist", json={"text": "Alice's passport"}, headers=alice).json
-    stay = client.post(f"/trips/{trip['id']}/lodgings", json={"name": "Alice's hotel"}, headers=alice).json
-    return {"trip": trip["id"], "day": day["id"], "stop": stop["id"],
-            "idea": idea["id"], "expense": expense["id"], "item": item["id"], "stay": stay["id"]}
-
-
 ENDPOINTS = [
     ("get", "/trips/{trip}", None),
     ("patch", "/trips/{trip}", {"name": "hacked"}),

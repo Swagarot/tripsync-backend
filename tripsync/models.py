@@ -1,7 +1,7 @@
 import uuid
 import datetime as dt
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, Time, Uuid
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, Time, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .extensions import db
@@ -55,7 +55,8 @@ class Trip(SyncColumns, db.Model):
     __tablename__ = "trips"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    # The owner. Every trip query filters on this (see trips.py).
+    # The owner: the only one who can rename or delete the trip and manage who
+    # else is on it. Other people get in through trip_members (access.py).
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(200))
     start_date: Mapped[dt.date | None] = mapped_column(Date)
@@ -69,6 +70,9 @@ class Trip(SyncColumns, db.Model):
     dest_zoom: Mapped[float | None] = mapped_column(Float)  # country ~5, city ~11
     # Expenses are converted into this currency for the totals (ISO code, ILS...).
     home_currency: Mapped[str | None] = mapped_column(String(3))
+    # Part of every invite link (sharing.py). "Cancel all invite links" adds
+    # one, so every link made before stops working.
+    invite_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     days: Mapped[list["Day"]] = relationship(back_populates="trip", order_by="Day.position")
     ideas: Mapped[list["SavedPlace"]] = relationship(order_by="SavedPlace.created_at")
@@ -100,6 +104,22 @@ class Trip(SyncColumns, db.Model):
             data["checklist"] = live(self.checklist)
             data["lodgings"] = live(self.lodgings)
         return data
+
+
+class TripMember(db.Model):
+    """Someone other than the owner who has access to a trip.
+
+    editor: may change everything in the trip (days, stops, expenses, photos...).
+    viewer: may only look. The owner is not in this table (trips.user_id).
+    Removing someone deletes the row: access is checked on every request, so
+    it's gone at once.
+    """
+    __tablename__ = "trip_members"
+
+    trip_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("trips.id", ondelete="CASCADE"), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True)
+    role: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Day(SyncColumns, db.Model):
@@ -235,11 +255,20 @@ class Expense(TripChild, db.Model):
     category: Mapped[str] = mapped_column(String(16))
     note: Mapped[str | None] = mapped_column(String(300))
     date: Mapped[dt.date | None] = mapped_column(Date)
+    # Splitting (shared trips). Only facts are stored: who paid, and between
+    # whom it's shared (user ids; null = everyone on the trip). Who owes whom
+    # is worked out from these when shown (frontend), never stored, so an edited
+    # or deleted expense can't leave stale balances behind.
+    # null paid_by = not assigned (expenses from before sharing, single-user trips).
+    paid_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    split_between: Mapped[list | None] = mapped_column(JSON)
 
     def to_dict(self):
         return {
             **self.base_dict(), "amount": float(self.amount), "currency": self.currency,
             "category": self.category, "note": self.note, "date": iso(self.date),
+            "paid_by": str(self.paid_by) if self.paid_by else None,
+            "split_between": self.split_between,
         }
 
 
