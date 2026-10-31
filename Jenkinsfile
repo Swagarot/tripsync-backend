@@ -59,7 +59,11 @@ pipeline {
             parallel {
                 stage('Helm chart') {
                     steps {
-                        sh 'helm lint devops/k8s-helm/tripsync'
+                        // Lint as EKS (defaults) and as k3s (what Argo CD renders).
+                        sh '''
+                            helm lint devops/k8s-helm/tripsync
+                            helm lint devops/k8s-helm/tripsync -f devops/k8s-helm/tripsync/values-k3s.yaml
+                        '''
                     }
                 }
                 stage('flake8') {
@@ -164,16 +168,15 @@ pipeline {
         stage('Deploy') {
             steps {
                 // Lockable Resources plugin. The frontend job takes the same
-                // lock, so only one helm upgrade of the shared 'tripsync'
-                // release runs at a time; the other job waits here instead of
-                // failing with "another operation is in progress".
+                // lock, so only one deploy runs at a time: on EKS one helm
+                // upgrade of the shared 'tripsync' release (the other job
+                // waits instead of failing with "another operation is in
+                // progress"), on k3s one push to tripsync-devops.
                 lock('tripsync-release') {
-                    // --reset-then-reuse-values: start from values.yaml,
+                    // EKS: --reset-then-reuse-values: start from values.yaml,
                     // re-apply the --set values of the previous release (e.g.
                     // the frontend tag), then apply ours. Without it the
                     // frontend tag would be reset to 'latest'. Needs Helm 3.14+.
-                    // -n default is where the release is stored; the pods live
-                    // in the 'tripsync' namespace (set by the chart).
                     // --install: if the release doesn't exist yet (fresh
                     // cluster), install it instead of failing.
                     script {
@@ -206,14 +209,49 @@ pipeline {
                                 '''
                             }
                         } else {
-                            // k3s: unchanged, uses ~/.kube/config on the agent.
-                            sh '''
-                                helm upgrade --install tripsync devops/k8s-helm/tripsync -n default \
-                                  --reset-then-reuse-values \
-                                  --set-string backend.image.tag=$IMAGE_TAG \
-                                  --atomic --timeout 3m
-                                kubectl get pods -n tripsync
-                            '''
+                            // k3s: GitOps. Jenkins doesn't touch the cluster:
+                            // it writes the new tag into values-k3s.yaml in
+                            // tripsync-devops and pushes, and Argo CD (running
+                            // in k3s) rolls it out within about a minute. The
+                            // commit is the deploy record; git revert = rollback.
+                            // gitUsernamePassword: the git plugin gives the
+                            // GitHub token to git through GIT_ASKPASS, so it is
+                            // never in a URL or in the log. The token needs
+                            // write access to tripsync-devops.
+                            withCredentials([gitUsernamePassword(
+                                    credentialsId: '6daea266-02fa-4ffd-ad67-4ab97eec3938',
+                                    gitToolName: 'Default')]) {
+                                // yq (throwaway container) changes one key and
+                                // keeps the file's comments. No change = no
+                                // commit, so rebuilding the same SHA is a no-op.
+                                // If the other job pushed in between, the push
+                                // is refused: start again from the new main.
+                                sh '''
+                                    cd devops
+                                    git config user.name "Jenkins"
+                                    git config user.email "jenkins@tripsync.invalid"
+                                    for attempt in 1 2 3; do
+                                      git fetch -q origin main
+                                      git reset -q --hard origin/main
+                                      docker run --rm -u $(id -u):$(id -g) -e IMAGE_TAG \
+                                        -v "$PWD:/w" -w /w mikefarah/yq:4.54.1 -i \
+                                        '.backend.image.tag = strenv(IMAGE_TAG)' \
+                                        k8s-helm/tripsync/values-k3s.yaml
+                                      if git diff --quiet; then
+                                        echo "values-k3s.yaml already has backend $IMAGE_TAG: nothing to deploy"
+                                        exit 0
+                                      fi
+                                      git commit -q -am "Deploy backend $IMAGE_TAG"
+                                      if git push -q origin HEAD:main; then
+                                        echo "Pushed. Argo CD deploys it; watch it on port 30443."
+                                        exit 0
+                                      fi
+                                      echo "Push refused (the other job pushed first?), retrying"
+                                      sleep 5
+                                    done
+                                    exit 1
+                                '''
+                            }
                         }
                     }
                 }
