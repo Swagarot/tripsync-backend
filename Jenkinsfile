@@ -44,13 +44,20 @@ pipeline {
                 dir('backend') {
                     checkout scm
                 }
-                // The Helm chart. poll: false so a chart-only commit doesn't
-                // trigger a backend build.
-                dir('devops') {
-                    git branch: 'main',
+                // The Helm chart (and values-k3s.yaml, which Deploy commits to).
+                // Cloned with plain git on purpose: Jenkins polls every repo
+                // checked out by a git/checkout step, and even with poll: false
+                // tripsync-devops commits started both jobs (proven 2026-10-31
+                // from Docker Hub push times). With GitOps every "Deploy" commit
+                // then rebuilt both apps. Polling can't see a shell clone, so
+                // only commits to this repo (backend) start a backend build.
+                withCredentials([gitUsernamePassword(
                         credentialsId: '6daea266-02fa-4ffd-ad67-4ab97eec3938',
-                        url: 'https://github.com/Swagarot/tripsync-devops.git',
-                        poll: false
+                        gitToolName: 'Default')]) {
+                    sh '''
+                        rm -rf devops
+                        git clone -q --branch main                           https://github.com/Swagarot/tripsync-devops.git devops
+                    '''
                 }
             }
         }
