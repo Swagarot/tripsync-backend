@@ -31,9 +31,10 @@ class Config:
     # Signs the login tokens. Anyone who knows it can mint a token for any
     # user, so in the cluster it comes from a Secret (see the Helm chart).
     JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
-    # One long-lived token instead of short access + refresh tokens: the app is
-    # meant to work offline for days, and a token that expires mid-trip would
-    # lock the user out of syncing. Trade-off: a stolen token works for 7 days.
+    # One long-lived token per device instead of short access + refresh tokens:
+    # the app is meant to work offline for days, and a token that expires
+    # mid-trip would lock the user out of syncing. Every online start swaps it
+    # for a new one (auth.py), so a stolen copy dies at the next refresh.
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(days=7)
 
     # Biggest request Flask accepts: a phone photo is 2-8 MB. (ingress-nginx has

@@ -51,6 +51,24 @@ class User(db.Model):
         return {"id": str(self.id), "email": self.email, "created_at": iso(self.created_at)}
 
 
+class AuthSession(db.Model):
+    """One logged-in device. Its token carries the session id ("sid") and is
+    only valid while its jti is this row's current one (see auth.py)."""
+
+    __tablename__ = "sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    jti: Mapped[str] = mapped_column(String(36))
+    # The token it replaced, still accepted for a short grace after rotating.
+    previous_jti: Mapped[str | None] = mapped_column(String(36))
+    rotated_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    revoked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    # "logout", "logout_all", "reused" (an old token came back: stolen) or "too_old".
+    revoked_reason: Mapped[str | None] = mapped_column(String(16))
+
+
 class Trip(SyncColumns, db.Model):
     __tablename__ = "trips"
 

@@ -232,5 +232,6 @@ def test_trip_page_query_count_does_not_grow_with_the_trip(app, client, alice):
         return trip
 
     small, big = queries_for(make_trip(1, 1)), queries_for(make_trip(5, 6))
-    # 7 for the trip itself + your role + the member list (owner, members).
-    assert small == big <= 10
+    # 7 for the trip itself + your role + the member list (owner, members)
+    # + the login session check (auth.py).
+    assert small == big <= 11

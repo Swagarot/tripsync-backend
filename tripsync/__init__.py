@@ -116,3 +116,7 @@ def register_error_handlers(app):
     @jwt.expired_token_loader
     def expired_token(header, payload):
         return jsonify({"error": "session expired, log in again"}), 401
+
+    @jwt.revoked_token_loader
+    def revoked_token(header, payload):
+        return jsonify({"error": "session ended, log in again"}), 401
