@@ -72,7 +72,7 @@ def test_not_an_image_is_refused(client, alice, stop, store):
 
 
 def test_without_storage_uploads_are_off(client, alice, stop, app, monkeypatch):
-    monkeypatch.delenv("S3_ENDPOINT", raising=False)
+    monkeypatch.delenv("S3_BUCKET", raising=False)
     app.config["PHOTO_STORAGE"] = None
     assert upload(client, alice, stop["stop"], image_bytes((100, 100))).status_code == 503
 
@@ -155,3 +155,25 @@ def test_storage_bootstrap_is_repeatable(monkeypatch):
     assert ("/v2/ApplyClusterLayout", {"version": 1}) in calls
     assert ("/v2/AllowBucketKey", {"bucketId": "b1", "accessKeyId": "GK00",
                                    "permissions": {"read": True, "write": True, "owner": False}}) in calls
+
+
+def test_aws_s3_uses_the_pod_role_not_a_key(monkeypatch):
+    # EKS: no endpoint and no key in the environment; boto3 finds the pod's
+    # role (Pod Identity) by itself. Garage: endpoint + key, path-style URLs.
+    from tripsync import storage
+
+    for name in ("S3_ENDPOINT", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("S3_BUCKET", "tripsync-photos-123")
+    monkeypatch.setenv("S3_REGION", "eu-central-1")
+    aws = storage.S3Storage()
+    assert aws.bucket == "tripsync-photos-123"
+    assert aws.s3.meta.endpoint_url == "https://s3.eu-central-1.amazonaws.com"
+    assert aws.s3.meta.config.s3["addressing_style"] == "auto"
+
+    monkeypatch.setenv("S3_ENDPOINT", "http://tripsync-garage:3900")
+    monkeypatch.setenv("S3_ACCESS_KEY_ID", "GK00")
+    monkeypatch.setenv("S3_SECRET_ACCESS_KEY", "s")
+    garage = storage.S3Storage()
+    assert garage.s3.meta.endpoint_url == "http://tripsync-garage:3900"
+    assert garage.s3.meta.config.s3["addressing_style"] == "path"

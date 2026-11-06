@@ -66,10 +66,13 @@ pipeline {
             parallel {
                 stage('Helm chart') {
                     steps {
-                        // Lint as EKS (defaults) and as k3s (what Argo CD renders).
+                        // Lint with the defaults, as k3s (what Argo CD renders)
+                        // and as EKS (what the eks branch below deploys).
                         sh '''
                             helm lint devops/k8s-helm/tripsync
                             helm lint devops/k8s-helm/tripsync -f devops/k8s-helm/tripsync/values-k3s.yaml
+                            helm lint devops/k8s-helm/tripsync -f devops/k8s-helm/tripsync/values-eks.yaml \
+                              --set s3.bucket=tripsync-photos-lint
                         '''
                     }
                 }
@@ -200,17 +203,20 @@ pipeline {
                                 // touched. It holds no secret: kubectl/helm run
                                 // 'aws eks get-token' with the keys above.
                                 // On EKS the release is stored in 'tripsync'.
-                                // Postgres's disk is a gp3 EBS volume there
-                                // (StorageClass made by terraform/aws), not Longhorn.
+                                // values-eks.yaml: Postgres on a gp3 EBS volume,
+                                // photos in S3 instead of Garage (terraform/aws).
+                                // The bucket is named after the AWS account.
                                 sh '''
                                     export AWS_DEFAULT_REGION=eu-central-1
                                     export KUBECONFIG="$WORKSPACE/kubeconfig-eks"
                                     aws eks update-kubeconfig --name tripsync-cluster \
                                       --kubeconfig "$WORKSPACE/kubeconfig-eks"
+                                    ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
                                     helm upgrade --install tripsync devops/k8s-helm/tripsync -n tripsync \
                                       --reset-then-reuse-values \
+                                      -f devops/k8s-helm/tripsync/values-eks.yaml \
                                       --set-string backend.image.tag=$IMAGE_TAG \
-                                      --set postgres.storageClassName=gp3 \
+                                      --set s3.bucket=tripsync-photos-$ACCOUNT \
                                       --atomic --timeout 3m
                                     kubectl get pods -n tripsync
                                 '''

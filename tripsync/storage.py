@@ -11,9 +11,14 @@ is gone). Garage is a small, maintained, S3-compatible store built for
 self-hosting.
 
 Configuration comes from the environment (set by the Helm chart):
-  S3_ENDPOINT, S3_BUCKET, S3_REGION, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY
+  S3_BUCKET                              the switch: unset = photo uploads off
+  S3_ENDPOINT                            Garage (k3s, compose); unset = AWS S3
+  S3_REGION
+  S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY Garage's key; unset on EKS, where
+                                         boto3 finds the pod's IAM role itself
+                                         (EKS Pod Identity), so no key is stored
   GARAGE_ADMIN_URL, GARAGE_ADMIN_TOKEN   (only for `flask storage-init`)
-Without S3_ENDPOINT, photo uploads are switched off (503) and everything else
+Without S3_BUCKET, photo uploads are switched off (503) and everything else
 works as before.
 """
 import json
@@ -35,16 +40,20 @@ class S3Storage:
         import boto3  # imported here: only needed when storage is configured
         from botocore.config import Config
 
-        self.bucket = os.environ.get("S3_BUCKET", "tripsync-photos")
+        self.bucket = os.environ["S3_BUCKET"]
+        endpoint = os.environ.get("S3_ENDPOINT") or None
         self.s3 = boto3.client(
             "s3",
-            endpoint_url=os.environ["S3_ENDPOINT"],
-            region_name=os.environ.get("S3_REGION", "garage"),
-            aws_access_key_id=os.environ["S3_ACCESS_KEY_ID"],
-            aws_secret_access_key=os.environ["S3_SECRET_ACCESS_KEY"],
-            # Garage serves buckets as paths (/bucket/key), not subdomains.
+            endpoint_url=endpoint,
+            region_name=os.environ.get("S3_REGION"),
+            # None = boto3's own credential chain (on EKS: Pod Identity).
+            aws_access_key_id=os.environ.get("S3_ACCESS_KEY_ID") or None,
+            aws_secret_access_key=os.environ.get("S3_SECRET_ACCESS_KEY") or None,
+            # Garage serves buckets as paths (/bucket/key), not subdomains;
+            # AWS S3 wants subdomains ("auto" picks them).
             config=Config(
-                s3={"addressing_style": "path"}, retries={"max_attempts": 3}, connect_timeout=5, read_timeout=20,
+                s3={"addressing_style": "path" if endpoint else "auto"},
+                retries={"max_attempts": 3}, connect_timeout=5, read_timeout=20,
             ),
         )
 
@@ -82,7 +91,7 @@ def get_storage(app):
     global _client
     if app.config.get("PHOTO_STORAGE") is not None:
         return app.config["PHOTO_STORAGE"]
-    if not os.environ.get("S3_ENDPOINT"):
+    if not os.environ.get("S3_BUCKET"):
         raise StorageUnavailable("Photo storage isn't set up on this server.")
     if _client is None:
         _client = S3Storage()
