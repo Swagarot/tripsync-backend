@@ -6,6 +6,14 @@ FROM python:3.11-slim
 # runs relative to this path
 WORKDIR /app
 
+# An unprivileged user to run as (switched to below, after the installs).
+# Made here, before any COPY, so it's a cached layer that never reruns: every
+# step after a changed COPY is rebuilt. A fixed numeric UID lets Kubernetes
+# verify it (runAsNonRoot). --create-home: Gunicorn 26's control socket lives
+# in the user's home directory; without one it logs "Permission denied:
+# '/home/tripsync'".
+RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin tripsync
+
 # Copy just the requirements file first, not the whole app yet.
 # This is a deliberate ordering trick: Docker caches each step, and this
 # layer only gets rebuilt when requirements.txt itself changes — not every
@@ -17,12 +25,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # left out by .dockerignore)
 COPY . .
 
-# Run as an unprivileged user instead of root. If someone ever finds a way to
-# run code through the app, they get a user that owns nothing and can't install
-# anything. A fixed numeric UID lets Kubernetes verify it (runAsNonRoot).
-# --create-home: Gunicorn 26's control socket lives in the user's home
-# directory; without one it logs "Permission denied: '/home/tripsync'".
-RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin tripsync
+# Run as that user instead of root. If someone ever finds a way to run code
+# through the app, they get a user that owns nothing and can't install
+# anything.
 USER 10001
 
 # Lets `flask db upgrade` (run by the init container, see the Helm chart)
